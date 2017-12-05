@@ -192,6 +192,8 @@ struct SymbolCU {
   DwarfCompileUnit *CU;
 };
 
+class DummyDwarfExpression;
+
 /// Collects and handles dwarf debug information.
 class DwarfDebug : public DebugHandlerBase {
   /// All DIEValues are allocated through this allocator.
@@ -300,6 +302,14 @@ class DwarfDebug : public DebugHandlerBase {
   bool SingleCU;
   bool IsDarwin;
 
+  /// Map for tracking Fortran deferred CHARACTER lengths
+  DenseMap<const DIStringType*, unsigned> StringTypeLocMap;
+
+  /// Map for tracking Fortran assumed shape array descriptors
+  DenseMap<const DIFortranSubrange*, DIE*> SubrangeDieMap;
+
+  DenseMap<const DIVariable*,const DIType*> VariableInDependentType;
+
   AddressPool AddrPool;
 
   /// Apple accelerator tables.
@@ -391,6 +401,12 @@ class DwarfDebug : public DebugHandlerBase {
   void emitMacro(DIMacro &M);
   void emitMacroFile(DIMacroFile &F, DwarfCompileUnit &U);
   void handleMacroNodes(DIMacroNodeArray Nodes, DwarfCompileUnit &U);
+
+  /// Populate dependent type variable map
+  void populateDependentTypeMap();
+
+  /// Clear dependent type tracking map
+  void clearDependentTracking() { VariableInDependentType.clear(); }
 
   /// DWARF 5 Experimental Split Dwarf Emitters
 
@@ -590,6 +606,21 @@ public:
 
   /// Find the matching DwarfCompileUnit for the given CU DIE.
   DwarfCompileUnit *lookupCU(const DIE *Die) { return CUDieMap.lookup(Die); }
+
+  unsigned getStringTypeLoc(const DIStringType *ST) const {
+    auto I = StringTypeLocMap.find(ST);
+    return I != StringTypeLocMap.end() ? I->second : 0;
+  }
+
+  void addStringTypeLoc(const DIStringType *ST, unsigned Loc) {
+    assert(ST);
+    if (Loc)
+      StringTypeLocMap[ST] = Loc;
+  }
+
+  DIE *getSubrangeDie(const DIFortranSubrange *SR) const;
+  void constructSubrangeDie(const DIFortranArrayType *AT,
+                            DbgVariable &DV, DwarfCompileUnit &TheCU);
 
   /// \defgroup DebuggerTuning Predicates to tune DWARF for a given debugger.
   ///
