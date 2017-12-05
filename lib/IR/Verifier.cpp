@@ -891,13 +891,13 @@ void Verifier::visitDIEnumerator(const DIEnumerator &N) {
 
 void Verifier::visitDIBasicType(const DIBasicType &N) {
   AssertDI(N.getTag() == dwarf::DW_TAG_base_type ||
-               N.getTag() == dwarf::DW_TAG_unspecified_type ||
-               N.getTag() == dwarf::DW_TAG_string_type,
+           N.getTag() == dwarf::DW_TAG_unspecified_type ||
+           N.getTag() == dwarf::DW_TAG_string_type,
            "invalid tag", &N);
 }
 
 void Verifier::visitDIStringType(const DIStringType &N) {
-  AssertDI( N.getTag() == dwarf::DW_TAG_string_type,
+  AssertDI(N.getTag() == dwarf::DW_TAG_string_type,
            "invalid tag", &N);
 }
 
