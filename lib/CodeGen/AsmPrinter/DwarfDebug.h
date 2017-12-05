@@ -192,7 +192,6 @@ struct SymbolCU {
   DwarfCompileUnit *CU;
 };
 
-
 /// The kind of accelerator tables we should emit.
 enum class AccelTableKind {
   Default, ///< Platform default.
@@ -419,6 +418,12 @@ class DwarfDebug : public DebugHandlerBase {
   void emitMacroFile(DIMacroFile &F, DwarfCompileUnit &U);
   void handleMacroNodes(DIMacroNodeArray Nodes, DwarfCompileUnit &U);
 
+  /// Populate dependent type variable map
+  void populateDependentTypeMap();
+
+  /// Clear dependent type tracking map
+  void clearDependentTracking() { VariableInDependentType.clear(); }
+
   /// DWARF 5 Experimental Split Dwarf Emitters
 
   /// Initialize common features of skeleton units.
@@ -626,6 +631,21 @@ public:
   const DwarfCompileUnit *lookupCU(const DIE *Die) const {
     return CUDieMap.lookup(Die);
   }
+
+  unsigned getStringTypeLoc(const DIStringType *ST) const {
+    auto I = StringTypeLocMap.find(ST);
+    return I != StringTypeLocMap.end() ? I->second : 0;
+  }
+
+  void addStringTypeLoc(const DIStringType *ST, unsigned Loc) {
+    assert(ST);
+    if (Loc)
+      StringTypeLocMap[ST] = Loc;
+  }
+
+  DIE *getSubrangeDie(const DIFortranSubrange *SR) const;
+  void constructSubrangeDie(const DIFortranArrayType *AT,
+                            DbgVariable &DV, DwarfCompileUnit &TheCU);
 
   unsigned getStringTypeLoc(const DIStringType *ST) const {
     auto I = StringTypeLocMap.find(ST);
