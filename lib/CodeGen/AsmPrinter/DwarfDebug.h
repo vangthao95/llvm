@@ -192,6 +192,7 @@ struct SymbolCU {
   DwarfCompileUnit *CU;
 };
 
+
 /// The kind of accelerator tables we should emit.
 enum class AccelTableKind {
   Default, ///< Platform default.
@@ -199,6 +200,8 @@ enum class AccelTableKind {
   Apple,   ///< .apple_names, .apple_namespaces, .apple_types, .apple_objc.
   Dwarf,   ///< DWARF v5 .debug_names.
 };
+
+class DummyDwarfExpression;
 
 /// Collects and handles dwarf debug information.
 class DwarfDebug : public DebugHandlerBase {
@@ -307,6 +310,14 @@ class DwarfDebug : public DebugHandlerBase {
   /// True iff there are multiple CUs in this module.
   bool SingleCU;
   bool IsDarwin;
+
+  /// Map for tracking Fortran deferred CHARACTER lengths
+  DenseMap<const DIStringType*, unsigned> StringTypeLocMap;
+
+  /// Map for tracking Fortran assumed shape array descriptors
+  DenseMap<const DIFortranSubrange*, DIE*> SubrangeDieMap;
+
+  DenseMap<const DIVariable*,const DIType*> VariableInDependentType;
 
   AddressPool AddrPool;
 
@@ -464,8 +475,15 @@ class DwarfDebug : public DebugHandlerBase {
   void collectVariableInfoFromMFTable(DwarfCompileUnit &TheCU,
                                       DenseSet<InlinedVariable> &P);
 
+
   /// Emit the reference to the section.
   void emitSectionReference(const DwarfCompileUnit &CU);
+
+  /// Populate dependent type variable map
+  void populateDependentTypeMap();
+
+  /// Clear dependent type tracking map
+  void clearDependentTracking() { VariableInDependentType.clear(); }
 
 protected:
   /// Gather pre-function debug information.
@@ -608,6 +626,21 @@ public:
   const DwarfCompileUnit *lookupCU(const DIE *Die) const {
     return CUDieMap.lookup(Die);
   }
+
+  unsigned getStringTypeLoc(const DIStringType *ST) const {
+    auto I = StringTypeLocMap.find(ST);
+    return I != StringTypeLocMap.end() ? I->second : 0;
+  }
+
+  void addStringTypeLoc(const DIStringType *ST, unsigned Loc) {
+    assert(ST);
+    if (Loc)
+      StringTypeLocMap[ST] = Loc;
+  }
+
+  DIE *getSubrangeDie(const DIFortranSubrange *SR) const;
+  void constructSubrangeDie(const DIFortranArrayType *AT,
+                            DbgVariable &DV, DwarfCompileUnit &TheCU);
 
   /// \defgroup DebuggerTuning Predicates to tune DWARF for a given debugger.
   ///
