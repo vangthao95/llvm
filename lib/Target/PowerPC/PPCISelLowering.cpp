@@ -140,6 +140,10 @@ PPCTargetLowering::PPCTargetLowering(const PPCTargetMachine &TM,
   setOperationAction(ISD::BITREVERSE, MVT::i32, Legal);
   setOperationAction(ISD::BITREVERSE, MVT::i64, Legal);
 
+  // Sub-word ATOMIC_CMP_SWAP need to ensure that the input is zero-extended.
+  setOperationAction(ISD::ATOMIC_CMP_SWAP, MVT::i32, Custom);
+  setOperationAction(ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS, MVT::i32, Custom);
+
   // PowerPC has an i16 but no i8 (or i1) SEXTLOAD.
   for (MVT VT : MVT::integer_valuetypes()) {
     setLoadExtAction(ISD::SEXTLOAD, VT, MVT::i1, Promote);
@@ -8495,6 +8499,73 @@ SDValue PPCTargetLowering::LowerREM(SDValue Op, SelectionDAG &DAG) const {
   return Op;
 }
 
+// Test if an SDValue is zero-extended from  \p From bits to \p To bits.
+static bool isZeroExtended(SDValue Op, unsigned From, unsigned To) {
+  if (To < From)
+    return false;
+  if (To == From)
+    return true;
+  unsigned OpWidth = Op.getValueType().getSizeInBits();
+  if (OpWidth != To)
+    return false;
+
+  // Explicitly zero-extended values.
+  if (Op.getOpcode() == ISD::ZERO_EXTEND)
+    return true;
+  if (Op.getOpcode() == ISD::AssertZext &&
+      cast<VTSDNode>(Op.getOperand(1))->getVT().getSizeInBits() == From)
+    return true;
+
+  // Masked values.
+  if (Op.getOpcode() == ISD::AND)
+    if (ConstantSDNode *Mask = isConstOrConstSplat(Op.getOperand(1)))
+      return Mask->getZExtValue() == ((1U << From) - 1);
+
+  // ZExt load.
+  if (Op.getOpcode() == ISD::LOAD)
+    if (LoadSDNode *LD = dyn_cast<LoadSDNode>(Op))
+      return LD->getExtensionType() == ISD::ZEXTLOAD;
+  return false;
+}
+
+// ATOMIC_CMP_SWAP for i8/i16 needs to zero-extend its input since it will be
+// compared to a value that is atomically loaded (atomic loads zero-extend).
+SDValue PPCTargetLowering::LowerATOMIC_CMP_SWAP(SDValue Op,
+                                                SelectionDAG &DAG) const {
+  unsigned Opc = Op.getOpcode();
+  assert((Opc == ISD::ATOMIC_CMP_SWAP ||
+          Opc == ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS) &&
+         "Expecting an atomic compare-and-swap here.");
+  SDLoc dl(Op);
+  auto *AtomicNode = cast<AtomicSDNode>(Op.getNode());
+  EVT MemVT = AtomicNode->getMemoryVT();
+  bool ToExpand = Opc == ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS;
+  if (MemVT.getSizeInBits() >= 32)
+    return ToExpand ? SDValue() : Op;
+
+  SDValue CmpOp = Op.getOperand(2);
+  // If this is already correctly zero-extended, leave it alone.
+  if (isZeroExtended(CmpOp, MemVT.getSizeInBits(), 32))
+    return ToExpand ? SDValue() : Op;
+
+  // Clear the high bits of the compare operand.
+  unsigned MaskVal = (1 << MemVT.getSizeInBits()) - 1;
+  SDValue NewCmpOp =
+    DAG.getNode(ISD::AND, dl, MVT::i32, CmpOp,
+                DAG.getConstant(MaskVal, dl, MVT::i32));
+
+  // Replace the existing compare operand with the properly zero-extended one.
+  SmallVector<SDValue, 4> Ops;
+  for (int i = 0, e = AtomicNode->getNumOperands(); i < e; i++)
+    Ops.push_back(AtomicNode->getOperand(i));
+  Ops[2] = NewCmpOp;
+  DAG.UpdateNodeOperands(AtomicNode, Ops);
+
+  // ATOMIC_CMP_SWAP is Legal and ATOMIC_CMP_SWAP_WITH_SUCCESS needs to be
+  // Expanded.
+  return ToExpand ? SDValue() : Op;
+}
+
 SDValue PPCTargetLowering::LowerSIGN_EXTEND_INREG(SDValue Op,
                                                   SelectionDAG &DAG) const {
   SDLoc dl(Op);
@@ -8966,6 +9037,9 @@ SDValue PPCTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::SREM:
   case ISD::UREM:
     return LowerREM(Op, DAG);
+  case ISD::ATOMIC_CMP_SWAP:
+  case ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS:
+    return LowerATOMIC_CMP_SWAP(Op, DAG);
   }
 }
 
