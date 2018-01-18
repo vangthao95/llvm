@@ -59,7 +59,7 @@ HANDLE_DI_FLAG((1 << 2) | (1 << 5), IndirectVirtualBase)
 #ifdef DI_FLAG_LARGEST_NEEDED
 // intended to be used with ADT/BitmaskEnum.h
 // NOTE: always must be equal to largest flag, check this when adding new flag
-HANDLE_DI_FLAG((1 << 28), Largest)
+HANDLE_DI_FLAG((1 << 29), Largest)
 #undef DI_FLAG_LARGEST_NEEDED
 #endif
 
