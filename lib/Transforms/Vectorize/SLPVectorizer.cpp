@@ -1340,13 +1340,19 @@ void BoUpSLP::buildTree(ArrayRef<Value *> Roots,
     // For each lane:
     for (int Lane = 0, LE = Entry->Scalars.size(); Lane != LE; ++Lane) {
       Value *Scalar = Entry->Scalars[Lane];
+      int FoundLane = Lane;
+      if (!Entry->ReuseShuffleIndices.empty()) {
+        FoundLane =
+            std::distance(Entry->ReuseShuffleIndices.begin(),
+                          llvm::find(Entry->ReuseShuffleIndices, FoundLane));
+      }
 
       // Check if the scalar is externally used as an extra arg.
       auto ExtI = ExternallyUsedValues.find(Scalar);
       if (ExtI != ExternallyUsedValues.end()) {
         DEBUG(dbgs() << "SLP: Need to extract: Extra arg from lane " <<
               Lane << " from " << *Scalar << ".\n");
-        ExternalUses.emplace_back(Scalar, nullptr, Lane);
+        ExternalUses.emplace_back(Scalar, nullptr, FoundLane);
       }
       for (User *U : Scalar->users()) {
         DEBUG(dbgs() << "SLP: Checking user:" << *U << ".\n");
@@ -1376,7 +1382,7 @@ void BoUpSLP::buildTree(ArrayRef<Value *> Roots,
 
         DEBUG(dbgs() << "SLP: Need to extract:" << *U << " from lane " <<
               Lane << " from " << *Scalar << ".\n");
-        ExternalUses.push_back(ExternalUser(Scalar, U, Lane));
+        ExternalUses.push_back(ExternalUser(Scalar, U, FoundLane));
       }
     }
   }
@@ -2836,6 +2842,11 @@ Value *BoUpSLP::Gather(ArrayRef<Value *> VL, VectorType *Ty) {
           }
         }
         assert(FoundLane >= 0 && "Could not find the correct lane");
+        if (!E->ReuseShuffleIndices.empty()) {
+          FoundLane =
+              std::distance(E->ReuseShuffleIndices.begin(),
+                            llvm::find(E->ReuseShuffleIndices, FoundLane));
+        }
         ExternalUses.push_back(ExternalUser(VL[i], Insrt, FoundLane));
       }
     }
