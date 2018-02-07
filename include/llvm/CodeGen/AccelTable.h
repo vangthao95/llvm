@@ -66,7 +66,7 @@
 /// If we have a match we look at that same entry in the offsets table and grab
 /// the offset in the data for our final match.
 ///
-/// The DWARFv5 accelerator table consists of zero or more name indices that
+/// The DWARF v5 accelerator table consists of zero or more name indices that
 /// are output into an on-disk format that looks like this:
 ///
 /// .------------------.
@@ -111,14 +111,7 @@ class AppleAccelTableHeader {
     Header(uint32_t DataLength) : HeaderDataLength(DataLength) {}
 
 #ifndef NDEBUG
-    void print(raw_ostream &OS) const {
-      OS << "Magic: " << format("0x%x", Magic) << "\n"
-         << "Version: " << Version << "\n"
-         << "Hash Function: " << HashFunction << "\n"
-         << "Bucket Count: " << BucketCount << "\n"
-         << "Header Data Length: " << HeaderDataLength << "\n";
-    }
-
+    void print(raw_ostream &OS) const;
     void dump() const { print(dbgs()); }
 #endif
   };
@@ -136,11 +129,7 @@ public:
     constexpr Atom(uint16_t Type, uint16_t Form) : Type(Type), Form(Form) {}
 
 #ifndef NDEBUG
-    void print(raw_ostream &OS) const {
-      OS << "Type: " << dwarf::AtomTypeString(Type) << "\n"
-         << "Form: " << dwarf::FormEncodingString(Form) << "\n";
-    }
-
+    void print(raw_ostream &OS) const;
     void dump() const { print(dbgs()); }
 #endif
   };
@@ -153,18 +142,21 @@ private:
     /// base is used to describe the offset for all forms in the list of atoms.
     uint32_t DieOffsetBase;
 
-    SmallVector<Atom, 3> Atoms;
+    const SmallVector<Atom, 4> Atoms;
 
+#ifndef _MSC_VER
+    // See the `static constexpr` below why we need an alternative
+    // implementation for MSVC.
     HeaderData(ArrayRef<Atom> AtomList, uint32_t Offset = 0)
         : DieOffsetBase(Offset), Atoms(AtomList.begin(), AtomList.end()) {}
+#else
+    // FIXME: Erase this path once the minimum MSCV version has been bumped.
+    HeaderData(const SmallVectorImpl<Atom> &Atoms, uint32_t Offset = 0)
+        : DieOffsetBase(Offset), Atoms(Atoms.begin(), Atoms.end()) {}
+#endif
 
 #ifndef NDEBUG
-    void print(raw_ostream &OS) const {
-      OS << "DIE Offset Base: " << DieOffsetBase << "\n";
-      for (auto Atom : Atoms)
-        Atom.print(OS);
-    }
-
+    void print(raw_ostream &OS) const;
     void dump() const { print(dbgs()); }
 #endif
   };
@@ -174,8 +166,16 @@ private:
 
 public:
   /// The length of the header data is always going to be 4 + 4 + 4*NumAtoms.
+#ifndef _MSC_VER
+  // See the `static constexpr` below why we need an alternative implementation
+  // for MSVC.
   AppleAccelTableHeader(ArrayRef<AppleAccelTableHeader::Atom> Atoms)
       : Header(8 + (Atoms.size() * 4)), HeaderData(Atoms) {}
+#else
+  // FIXME: Erase this path once the minimum MSCV version has been bumped.
+  AppleAccelTableHeader(const SmallVectorImpl<Atom> &Atoms)
+      : Header(8 + (Atoms.size() * 4)), HeaderData(Atoms) {}
+#endif
 
   /// Update header with hash and bucket count.
   void setBucketAndHashCount(uint32_t HashCount);
@@ -187,11 +187,7 @@ public:
   void emit(AsmPrinter *);
 
 #ifndef NDEBUG
-  void print(raw_ostream &OS) const {
-    Header.print(OS);
-    HeaderData.print(OS);
-  }
-
+  void print(raw_ostream &OS) const;
   void dump() const { print(dbgs()); }
 #endif
 };
@@ -236,19 +232,7 @@ protected:
     }
 
 #ifndef NDEBUG
-    void print(raw_ostream &OS) {
-      OS << "Name: " << Str << "\n";
-      OS << "  Hash Value: " << format("0x%x", HashValue) << "\n";
-      OS << "  Symbol: ";
-      if (Sym)
-        OS << *Sym;
-      else
-        OS << "<none>";
-      OS << "\n";
-      for (auto *Value : Data.Values)
-        Value->print(OS);
-    }
-
+    void print(raw_ostream &OS);
     void dump() { print(dbgs()); }
 #endif
   };
@@ -270,8 +254,16 @@ protected:
   using BucketList = std::vector<HashList>;
   BucketList Buckets;
 
+#ifndef _MSC_VER
+  // See the `static constexpr` below why we need an alternative implementation
+  // for MSVC.
   AppleAccelTableBase(ArrayRef<AppleAccelTableHeader::Atom> Atoms)
       : Header(Atoms), Entries(Allocator) {}
+#else
+  // FIXME: Erase this path once the minimum MSCV version has been bumped.
+  AppleAccelTableBase(const SmallVectorImpl<AppleAccelTableHeader::Atom> &Atoms)
+      : Header(Atoms), Entries(Allocator) {}
+#endif
 
 private:
   /// Emits the header for the table via the AsmPrinter.
@@ -311,27 +303,7 @@ public:
   }
 
 #ifndef NDEBUG
-  void print(raw_ostream &OS) const {
-    // Print Header.
-    Header.print(OS);
-
-    // Print Content.
-    OS << "Entries: \n";
-    for (const auto &Entry : Entries) {
-      OS << "Name: " << Entry.first() << "\n";
-      for (auto *V : Entry.second.Values)
-        V->print(OS);
-    }
-
-    OS << "Buckets and Hashes: \n";
-    for (auto &Bucket : Buckets)
-      for (auto &Hash : Bucket)
-        Hash->print(OS);
-
-    OS << "Data: \n";
-    for (auto &D : Data)
-      D->print(OS);
-  }
+  void print(raw_ostream &OS) const;
   void dump() const { print(dbgs()); }
 #endif
 };
@@ -368,15 +340,18 @@ public:
 
   void emit(AsmPrinter *Asm) const override;
 
-  static constexpr const AppleAccelTableHeader::Atom Atoms[] = {
+#ifndef _MSC_VER
+  // The line below is rejected by older versions (TBD) of MSVC.
+  static constexpr AppleAccelTableHeader::Atom Atoms[] = {
       AppleAccelTableHeader::Atom(dwarf::DW_ATOM_die_offset,
                                   dwarf::DW_FORM_data4)};
+#else
+  // FIXME: Erase this path once the minimum MSCV version has been bumped.
+  static const SmallVector<AppleAccelTableHeader::Atom, 4> Atoms;
+#endif
 
 #ifndef NDEBUG
-  void print(raw_ostream &OS) const override {
-    OS << "  Offset: " << Die->getOffset() << "\n";
-  }
-
+  void print(raw_ostream &OS) const override;
 #endif
 protected:
   uint64_t order() const override { return Die->getOffset(); }
@@ -391,18 +366,21 @@ public:
 
   void emit(AsmPrinter *Asm) const override;
 
-  static constexpr const AppleAccelTableHeader::Atom Atoms[] = {
+#ifndef _MSC_VER
+  // The line below is rejected by older versions (TBD) of MSVC.
+  static constexpr AppleAccelTableHeader::Atom Atoms[] = {
       AppleAccelTableHeader::Atom(dwarf::DW_ATOM_die_offset,
                                   dwarf::DW_FORM_data4),
       AppleAccelTableHeader::Atom(dwarf::DW_ATOM_die_tag, dwarf::DW_FORM_data2),
       AppleAccelTableHeader::Atom(dwarf::DW_ATOM_type_flags,
                                   dwarf::DW_FORM_data1)};
+#else
+  // FIXME: Erase this path once the minimum MSCV version has been bumped.
+  static const SmallVector<AppleAccelTableHeader::Atom, 4> Atoms;
+#endif
 
 #ifndef NDEBUG
-  void print(raw_ostream &OS) const override {
-    OS << "  Offset: " << Die->getOffset() << "\n";
-    OS << "  Tag: " << dwarf::TagString(Die->getTag()) << "\n";
-  }
+  void print(raw_ostream &OS) const override;
 #endif
 };
 
@@ -414,15 +392,18 @@ public:
 
   void emit(AsmPrinter *Asm) const override;
 
-  static constexpr const AppleAccelTableHeader::Atom Atoms[] = {
+#ifndef _MSC_VER
+  // The line below is rejected by older versions (TBD) of MSVC.
+  static constexpr AppleAccelTableHeader::Atom Atoms[] = {
       AppleAccelTableHeader::Atom(dwarf::DW_ATOM_die_offset,
                                   dwarf::DW_FORM_data4)};
+#else
+  // FIXME: Erase this path once the minimum MSCV version has been bumped.
+  static const SmallVector<AppleAccelTableHeader::Atom, 4> Atoms;
+#endif
 
 #ifndef NDEBUG
-  void print(raw_ostream &OS) const override {
-    OS << "  Static Offset: " << Offset << "\n";
-  }
-
+  void print(raw_ostream &OS) const override;
 #endif
 protected:
   uint64_t order() const override { return Offset; }
@@ -443,22 +424,21 @@ public:
 
   void emit(AsmPrinter *Asm) const override;
 
-  static constexpr const AppleAccelTableHeader::Atom Atoms[] = {
+#ifndef _MSC_VER
+  // The line below is rejected by older versions (TBD) of MSVC.
+  static constexpr AppleAccelTableHeader::Atom Atoms[] = {
       AppleAccelTableHeader::Atom(dwarf::DW_ATOM_die_offset,
                                   dwarf::DW_FORM_data4),
       AppleAccelTableHeader::Atom(dwarf::DW_ATOM_die_tag, dwarf::DW_FORM_data2),
       AppleAccelTableHeader::Atom(5, dwarf::DW_FORM_data1),
       AppleAccelTableHeader::Atom(6, dwarf::DW_FORM_data4)};
+#else
+  // FIXME: Erase this path once the minimum MSCV version has been bumped.
+  static const SmallVector<AppleAccelTableHeader::Atom, 4> Atoms;
+#endif
 
 #ifndef NDEBUG
-  void print(raw_ostream &OS) const override {
-    OS << "  Static Offset: " << Offset << "\n";
-    OS << "  QualifiedNameHash: " << format("%x\n", QualifiedNameHash) << "\n";
-    OS << "  Tag: " << dwarf::TagString(Tag) << "\n";
-    OS << "  ObjCClassIsImplementation: "
-       << (ObjCClassIsImplementation ? "true" : "false");
-    OS << "\n";
-  }
+  void print(raw_ostream &OS) const override;
 #endif
 protected:
   uint64_t order() const override { return Offset; }

@@ -284,16 +284,20 @@ bool DWARFFormValue::isFormClass(DWARFFormValue::FormClass FC) const {
   }
   // In DWARF3 DW_FORM_data4 and DW_FORM_data8 served also as a section offset.
   // Don't check for DWARF version here, as some producers may still do this
-  // by mistake. Also accept DW_FORM_strp since this is .debug_str section
-  // offset.
+  // by mistake. Also accept DW_FORM_[line_]strp since these are
+  // .debug_[line_]str section offsets.
   return (Form == DW_FORM_data4 || Form == DW_FORM_data8 ||
-          Form == DW_FORM_strp) &&
+          Form == DW_FORM_strp || Form == DW_FORM_line_strp) &&
          FC == FC_SectionOffset;
 }
 
 bool DWARFFormValue::extractValue(const DWARFDataExtractor &Data,
                                   uint32_t *OffsetPtr, DWARFFormParams FP,
+                                  const DWARFContext *Ctx,
                                   const DWARFUnit *CU) {
+  if (!Ctx && CU)
+    Ctx = &CU->getContext();
+  C = Ctx;
   U = CU;
   bool Indirect = false;
   bool IsBlock = false;
@@ -509,6 +513,11 @@ void DWARFFormValue::dump(raw_ostream &OS, DIDumpOptions DumpOpts) const {
       OS << format(" .debug_str[0x%8.8x] = ", (uint32_t)UValue);
     dumpString(OS);
     break;
+  case DW_FORM_line_strp:
+    if (DumpOpts.Verbose)
+      OS << format(" .debug_line_str[0x%8.8x] = ", (uint32_t)UValue);
+    dumpString(OS);
+    break;
   case DW_FORM_strx:
   case DW_FORM_strx1:
   case DW_FORM_strx2:
@@ -591,11 +600,12 @@ Optional<const char *> DWARFFormValue::getAsCString() const {
   if (Form == DW_FORM_string)
     return Value.cstr;
   // FIXME: Add support for DW_FORM_GNU_strp_alt
-  if (Form == DW_FORM_GNU_strp_alt || U == nullptr)
+  if (Form == DW_FORM_GNU_strp_alt || C == nullptr)
     return None;
   uint32_t Offset = Value.uval;
   if (Form == DW_FORM_line_strp) {
-    if (const char *Str = U->getLineStringExtractor().getCStr(&Offset))
+    // .debug_line_str is tracked in the Context.
+    if (const char *Str = C->getLineStringExtractor().getCStr(&Offset))
       return Str;
     return None;
   }
@@ -603,13 +613,19 @@ Optional<const char *> DWARFFormValue::getAsCString() const {
       Form == DW_FORM_strx1 || Form == DW_FORM_strx2 || Form == DW_FORM_strx3 ||
       Form == DW_FORM_strx4) {
     uint64_t StrOffset;
-    if (!U->getStringOffsetSectionItem(Offset, StrOffset))
+    if (!U || !U->getStringOffsetSectionItem(Offset, StrOffset))
       return None;
     Offset = StrOffset;
   }
-  if (const char *Str = U->getStringExtractor().getCStr(&Offset)) {
-    return Str;
+  // Prefer the Unit's string extractor, because for .dwo it will point to
+  // .debug_str.dwo, while the Context's extractor always uses .debug_str.
+  if (U) {
+    if (const char *Str = U->getStringExtractor().getCStr(&Offset))
+      return Str;
+    return None;
   }
+  if (const char *Str = C->getStringExtractor().getCStr(&Offset))
+    return Str;
   return None;
 }
 

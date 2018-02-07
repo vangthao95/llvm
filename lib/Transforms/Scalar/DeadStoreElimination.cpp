@@ -876,7 +876,7 @@ static bool tryToShorten(Instruction *EarlierWrite, int64_t &EarlierOffset,
   // as any store/memset/memcpy is likely using vector instructions so
   // shortening it to not vector size is likely to be slower
   MemIntrinsic *EarlierIntrinsic = cast<MemIntrinsic>(EarlierWrite);
-  unsigned EarlierWriteAlign = EarlierIntrinsic->getAlignment();
+  unsigned EarlierWriteAlign = EarlierIntrinsic->getDestAlignment();
   if (!IsOverwriteEnd)
     LaterOffset = int64_t(LaterOffset + LaterSize);
 
@@ -1172,7 +1172,8 @@ static bool eliminateDeadStores(BasicBlock &BB, AliasAnalysis *AA,
           auto *Earlier = dyn_cast<StoreInst>(DepWrite);
           auto *Later = dyn_cast<StoreInst>(Inst);
           if (Earlier && isa<ConstantInt>(Earlier->getValueOperand()) &&
-              Later && isa<ConstantInt>(Later->getValueOperand())) {
+              Later && isa<ConstantInt>(Later->getValueOperand()) &&
+              memoryIsNotModifiedBetween(Earlier, Later, AA)) {
             // If the store we find is:
             //   a) partially overwritten by the store to 'Loc'
             //   b) the later store is fully contained in the earlier one and

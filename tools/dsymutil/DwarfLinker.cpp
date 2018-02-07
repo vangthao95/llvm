@@ -3344,7 +3344,7 @@ void DwarfLinker::patchLineTableForUnit(CompileUnit &Unit,
   DWARFDataExtractor LineExtractor(
       OrigDwarf.getDWARFObj(), OrigDwarf.getDWARFObj().getLineSection(),
       OrigDwarf.isLittleEndian(), Unit.getOrigUnit().getAddressByteSize());
-  LineTable.parse(LineExtractor, &StmtOffset, &Unit.getOrigUnit());
+  LineTable.parse(LineExtractor, &StmtOffset, OrigDwarf, &Unit.getOrigUnit());
 
   // This vector is the output line table.
   std::vector<DWARFDebugLine::Row> NewRows;
@@ -3444,7 +3444,7 @@ void DwarfLinker::patchLineTableForUnit(CompileUnit &Unit,
     reportWarning("line table parameters mismatch. Cannot emit.");
   else {
     uint32_t PrologueEnd = *StmtList + 10 + LineTable.Prologue.PrologueLength;
-    // DWARFv5 has an extra 2 bytes of information before the header_length
+    // DWARF v5 has an extra 2 bytes of information before the header_length
     // field.
     if (LineTable.Prologue.getVersion() == 5)
       PrologueEnd += 2;

@@ -166,7 +166,7 @@ namespace llvm {
                                      DIFile *File);
 
     /// Create a single enumerator value.
-    DIEnumerator *createEnumerator(StringRef Name, int64_t Val);
+    DIEnumerator *createEnumerator(StringRef Name, int64_t Val, bool IsUnsigned = false);
 
     /// Create a DWARF unspecified type.
     DIBasicType *createUnspecifiedType(StringRef Name);
@@ -263,6 +263,27 @@ namespace llvm {
                                     uint32_t AlignInBits,
                                     uint64_t OffsetInBits,
                                     DINode::DIFlags Flags, DIType *Ty);
+
+    /// Create debugging information entry for a variant.  A variant
+    /// normally should be a member of a variant part.
+    /// \param Scope        Member scope.
+    /// \param Name         Member name.
+    /// \param File         File where this member is defined.
+    /// \param LineNo       Line number.
+    /// \param SizeInBits   Member size.
+    /// \param AlignInBits  Member alignment.
+    /// \param OffsetInBits Member offset.
+    /// \param Flags        Flags to encode member attribute, e.g. private
+    /// \param Discriminant The discriminant for this branch; null for
+    ///                     the default branch
+    /// \param Ty           Parent type.
+    DIDerivedType *createVariantMemberType(DIScope *Scope, StringRef Name,
+					   DIFile *File, unsigned LineNo,
+					   uint64_t SizeInBits,
+					   uint32_t AlignInBits,
+					   uint64_t OffsetInBits,
+					   Constant *Discriminant,
+					   DINode::DIFlags Flags, DIType *Ty);
 
     /// Create debugging information entry for a bit field member.
     /// \param Scope               Member scope.
@@ -385,6 +406,27 @@ namespace llvm {
                                      unsigned RunTimeLang = 0,
                                      StringRef UniqueIdentifier = "");
 
+    /// Create debugging information entry for a variant part.  A
+    /// variant part normally has a discriminator (though this is not
+    /// required) and a number of variant children.
+    /// \param Scope        Scope in which this union is defined.
+    /// \param Name         Union name.
+    /// \param File         File where this member is defined.
+    /// \param LineNumber   Line number.
+    /// \param SizeInBits   Member size.
+    /// \param AlignInBits  Member alignment.
+    /// \param Flags        Flags to encode member attribute, e.g. private
+    /// \param Discriminator Discriminant member
+    /// \param Elements     Variant elements.
+    /// \param UniqueIdentifier A unique identifier for the union.
+    DICompositeType *createVariantPart(DIScope *Scope, StringRef Name,
+				       DIFile *File, unsigned LineNumber,
+				       uint64_t SizeInBits, uint32_t AlignInBits,
+				       DINode::DIFlags Flags,
+				       DIDerivedType *Discriminator,
+				       DINodeArray Elements,
+				       StringRef UniqueIdentifier = "");
+
     /// Create debugging information for template
     /// type parameter.
     /// \param Scope        Scope in which this type is defined.
@@ -459,10 +501,11 @@ namespace llvm {
     /// \param Elements       Enumeration elements.
     /// \param UnderlyingType Underlying type of a C++11/ObjC fixed enum.
     /// \param UniqueIdentifier A unique identifier for the enum.
+    /// \param IsFixed Boolean flag indicate if this is C++11/ObjC fixed enum.
     DICompositeType *createEnumerationType(
         DIScope *Scope, StringRef Name, DIFile *File, unsigned LineNumber,
         uint64_t SizeInBits, uint32_t AlignInBits, DINodeArray Elements,
-        DIType *UnderlyingType, StringRef UniqueIdentifier = "");
+        DIType *UnderlyingType, StringRef UniqueIdentifier = "", bool IsFixed = false);
 
     /// Create subroutine type.
     /// \param ParameterTypes  An array of subroutine parameter types. This

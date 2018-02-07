@@ -44,4 +44,3 @@ entry:
 
 declare void @throws_1(i32, i32, i32) noreturn
 declare void @throws_2(i32, i32, i32, i32*) noreturn
-
