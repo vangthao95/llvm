@@ -4047,12 +4047,15 @@ bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
   if (DbgDeclareInst *DbgDecl = FindAllocaDbgDeclare(&AI)) {
     auto *Var = DbgDecl->getVariable();
     auto *Expr = DbgDecl->getExpression();
+    auto VarSize = Var->getSizeInBits();
     DIBuilder DIB(*AI.getModule(), /*AllowUnresolved*/ false);
     uint64_t AllocaSize = DL.getTypeSizeInBits(AI.getAllocatedType());
     for (auto Fragment : Fragments) {
       // Create a fragment expression describing the new partition or reuse AI's
       // expression if there is only one partition.
       auto *FragmentExpr = Expr;
+      if (VarSize && (Fragment.Size >= *VarSize))
+        continue;
       if (Fragment.Size < AllocaSize || Expr->isFragment()) {
         // If this alloca is already a scalar replacement of a larger aggregate,
         // Fragment.Offset describes the offset inside the scalar.
