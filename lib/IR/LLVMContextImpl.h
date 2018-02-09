@@ -390,13 +390,17 @@ template <> struct MDNodeKeyImpl<DIFortranSubrange> {
 template <> struct MDNodeKeyImpl<DIEnumerator> {
   int64_t Value;
   MDString *Name;
+  bool IsUnsigned;
 
-  MDNodeKeyImpl(int64_t Value, MDString *Name) : Value(Value), Name(Name) {}
+  MDNodeKeyImpl(int64_t Value, bool IsUnsigned, MDString *Name)
+      : Value(Value), Name(Name), IsUnsigned(IsUnsigned) {}
   MDNodeKeyImpl(const DIEnumerator *N)
-      : Value(N->getValue()), Name(N->getRawName()) {}
+      : Value(N->getValue()), Name(N->getRawName()),
+        IsUnsigned(N->isUnsigned()) {}
 
   bool isKeyOf(const DIEnumerator *RHS) const {
-    return Value == RHS->getValue() && Name == RHS->getRawName();
+    return Value == RHS->getValue() && IsUnsigned == RHS->isUnsigned() &&
+           Name == RHS->getRawName();
   }
 
   unsigned getHashValue() const { return hash_combine(Value, Name); }
@@ -568,18 +572,20 @@ template <> struct MDNodeKeyImpl<DICompositeType> {
   Metadata *VTableHolder;
   Metadata *TemplateParams;
   MDString *Identifier;
+  Metadata *Discriminator;
 
   MDNodeKeyImpl(unsigned Tag, MDString *Name, Metadata *File, unsigned Line,
                 Metadata *Scope, Metadata *BaseType, uint64_t SizeInBits,
                 uint32_t AlignInBits, uint64_t OffsetInBits, unsigned Flags,
                 Metadata *Elements, unsigned RuntimeLang,
                 Metadata *VTableHolder, Metadata *TemplateParams,
-                MDString *Identifier)
+                MDString *Identifier, Metadata *Discriminator)
       : Tag(Tag), Name(Name), File(File), Line(Line), Scope(Scope),
         BaseType(BaseType), SizeInBits(SizeInBits), OffsetInBits(OffsetInBits),
         AlignInBits(AlignInBits), Flags(Flags), Elements(Elements),
         RuntimeLang(RuntimeLang), VTableHolder(VTableHolder),
-        TemplateParams(TemplateParams), Identifier(Identifier) {}
+        TemplateParams(TemplateParams), Identifier(Identifier),
+        Discriminator(Discriminator) {}
   MDNodeKeyImpl(const DICompositeType *N)
       : Tag(N->getTag()), Name(N->getRawName()), File(N->getRawFile()),
         Line(N->getLine()), Scope(N->getRawScope()),
@@ -588,7 +594,8 @@ template <> struct MDNodeKeyImpl<DICompositeType> {
         Flags(N->getFlags()), Elements(N->getRawElements()),
         RuntimeLang(N->getRuntimeLang()), VTableHolder(N->getRawVTableHolder()),
         TemplateParams(N->getRawTemplateParams()),
-        Identifier(N->getRawIdentifier()) {}
+        Identifier(N->getRawIdentifier()),
+        Discriminator(N->getRawDiscriminator()) {}
 
   bool isKeyOf(const DICompositeType *RHS) const {
     return Tag == RHS->getTag() && Name == RHS->getRawName() &&
@@ -601,7 +608,8 @@ template <> struct MDNodeKeyImpl<DICompositeType> {
            RuntimeLang == RHS->getRuntimeLang() &&
            VTableHolder == RHS->getRawVTableHolder() &&
            TemplateParams == RHS->getRawTemplateParams() &&
-           Identifier == RHS->getRawIdentifier();
+           Identifier == RHS->getRawIdentifier() &&
+           Discriminator == RHS->getRawDiscriminator();
   }
 
   unsigned getHashValue() const {

@@ -138,6 +138,7 @@ public:
     ImmTyGLC,
     ImmTySLC,
     ImmTyTFE,
+    ImmTyD16,
     ImmTyClampSI,
     ImmTyOModSI,
     ImmTyDppCtrl,
@@ -286,7 +287,7 @@ public:
   bool isDMask() const { return isImmTy(ImmTyDMask); }
   bool isUNorm() const { return isImmTy(ImmTyUNorm); }
   bool isDA() const { return isImmTy(ImmTyDA); }
-  bool isR128() const { return isImmTy(ImmTyUNorm); }
+  bool isR128() const { return isImmTy(ImmTyR128); }
   bool isLWE() const { return isImmTy(ImmTyLWE); }
   bool isOff() const { return isImmTy(ImmTyOff); }
   bool isExpTgt() const { return isImmTy(ImmTyExpTgt); }
@@ -305,6 +306,7 @@ public:
   bool isGLC() const { return isImmTy(ImmTyGLC); }
   bool isSLC() const { return isImmTy(ImmTySLC); }
   bool isTFE() const { return isImmTy(ImmTyTFE); }
+  bool isD16() const { return isImmTy(ImmTyD16); }
   bool isDFMT() const { return isImmTy(ImmTyDFMT) && isUInt<8>(getImm()); }
   bool isNFMT() const { return isImmTy(ImmTyNFMT) && isUInt<8>(getImm()); }
   bool isBankMask() const { return isImmTy(ImmTyDppBankMask); }
@@ -657,6 +659,7 @@ public:
     case ImmTyGLC: OS << "GLC"; break;
     case ImmTySLC: OS << "SLC"; break;
     case ImmTyTFE: OS << "TFE"; break;
+    case ImmTyD16: OS << "D16"; break;
     case ImmTyDFMT: OS << "DFMT"; break;
     case ImmTyNFMT: OS << "NFMT"; break;
     case ImmTyClampSI: OS << "ClampSI"; break;
@@ -821,7 +824,7 @@ class AMDGPUAsmParser : public MCTargetAsmParser {
 
   // Number of extra operands parsed after the first optional operand.
   // This may be necessary to skip hardcoded mandatory operands.
-  static const unsigned MAX_OPR_LOOKAHEAD = 1;
+  static const unsigned MAX_OPR_LOOKAHEAD = 8;
 
   unsigned ForcedEncodingSize = 0;
   bool ForcedDPP = false;
@@ -902,6 +905,14 @@ public:
 
   bool hasXNACK() const {
     return AMDGPU::hasXNACK(getSTI());
+  }
+
+  bool hasMIMG_R128() const {
+    return AMDGPU::hasMIMG_R128(getSTI());
+  }
+
+  bool hasPackedD16() const {
+    return AMDGPU::hasPackedD16(getSTI());
   }
 
   bool isSI() const {
@@ -1039,6 +1050,8 @@ private:
   bool validateIntClampSupported(const MCInst &Inst);
   bool validateMIMGAtomicDMask(const MCInst &Inst);
   bool validateMIMGDataSize(const MCInst &Inst);
+  bool validateMIMGR128(const MCInst &Inst);
+  bool validateMIMGD16(const MCInst &Inst);
   bool usesConstantBus(const MCInst &Inst, unsigned OpIdx);
   bool isInlineConstant(const MCInst &Inst, unsigned OpIdx) const;
   unsigned findImplicitSGPRReadInVOP(const MCInst &Inst) const;
@@ -1081,6 +1094,7 @@ public:
   AMDGPUOperand::Ptr defaultSLC() const;
   AMDGPUOperand::Ptr defaultTFE() const;
 
+  AMDGPUOperand::Ptr defaultD16() const;
   AMDGPUOperand::Ptr defaultDMask() const;
   AMDGPUOperand::Ptr defaultUNorm() const;
   AMDGPUOperand::Ptr defaultDA() const;
@@ -2299,7 +2313,12 @@ bool AMDGPUAsmParser::validateMIMGDataSize(const MCInst &Inst) {
   if (DMask == 0)
     DMask = 1;
 
-  return (VDataSize / 4) == countPopulation(DMask) + TFESize;
+  unsigned DataSize = countPopulation(DMask);
+  if ((Desc.TSFlags & SIInstrFlags::D16) != 0 && hasPackedD16()) {
+    DataSize = (DataSize + 1) / 2;
+  }
+
+  return (VDataSize / 4) == DataSize + TFESize;
 }
 
 bool AMDGPUAsmParser::validateMIMGAtomicDMask(const MCInst &Inst) {
@@ -2322,6 +2341,35 @@ bool AMDGPUAsmParser::validateMIMGAtomicDMask(const MCInst &Inst) {
   return DMask == 0x1 || DMask == 0x3 || DMask == 0xf;
 }
 
+bool AMDGPUAsmParser::validateMIMGR128(const MCInst &Inst) {
+
+  const unsigned Opc = Inst.getOpcode();
+  const MCInstrDesc &Desc = MII.get(Opc);
+
+  if ((Desc.TSFlags & SIInstrFlags::MIMG) == 0)
+    return true;
+
+  int Idx = AMDGPU::getNamedOperandIdx(Opc, AMDGPU::OpName::r128);
+  assert(Idx != -1);
+
+  bool R128 = (Inst.getOperand(Idx).getImm() != 0);
+
+  return !R128 || hasMIMG_R128();
+}
+
+bool AMDGPUAsmParser::validateMIMGD16(const MCInst &Inst) {
+
+  const unsigned Opc = Inst.getOpcode();
+  const MCInstrDesc &Desc = MII.get(Opc);
+
+  if ((Desc.TSFlags & SIInstrFlags::MIMG) == 0)
+    return true;
+  if ((Desc.TSFlags & SIInstrFlags::D16) == 0)
+    return true;
+
+  return !isCI() && !isSI();
+}
+
 bool AMDGPUAsmParser::validateInstruction(const MCInst &Inst,
                                           const SMLoc &IDLoc) {
   if (!validateConstantBusLimitations(Inst)) {
@@ -2337,6 +2385,17 @@ bool AMDGPUAsmParser::validateInstruction(const MCInst &Inst,
   if (!validateIntClampSupported(Inst)) {
     Error(IDLoc,
       "integer clamping is not supported on this GPU");
+    return false;
+  }
+  if (!validateMIMGR128(Inst)) {
+    Error(IDLoc,
+      "r128 modifier is not supported on this GPU");
+    return false;
+  }
+  // For MUBUF/MTBUF d16 is a part of opcode, so there is nothing to validate.
+  if (!validateMIMGD16(Inst)) {
+    Error(IDLoc,
+      "d16 modifier is not supported on this GPU");
     return false;
   }
   if (!validateMIMGDataSize(Inst)) {
@@ -4016,6 +4075,10 @@ AMDGPUOperand::Ptr AMDGPUAsmParser::defaultTFE() const {
   return AMDGPUOperand::CreateImm(this, 0, SMLoc(), AMDGPUOperand::ImmTyTFE);
 }
 
+AMDGPUOperand::Ptr AMDGPUAsmParser::defaultD16() const {
+  return AMDGPUOperand::CreateImm(this, 0, SMLoc(), AMDGPUOperand::ImmTyD16);
+}
+
 void AMDGPUAsmParser::cvtMubufImpl(MCInst &Inst,
                                const OperandVector &Operands,
                                bool IsAtomic, bool IsAtomicReturn) {
@@ -4260,6 +4323,7 @@ static const OptionalOperand AMDGPUOptionalOperandTable[] = {
   {"glc",     AMDGPUOperand::ImmTyGLC, true, nullptr},
   {"slc",     AMDGPUOperand::ImmTySLC, true, nullptr},
   {"tfe",     AMDGPUOperand::ImmTyTFE, true, nullptr},
+  {"d16",     AMDGPUOperand::ImmTyD16, true, nullptr},
   {"high",    AMDGPUOperand::ImmTyHigh, true, nullptr},
   {"clamp",   AMDGPUOperand::ImmTyClampSI, true, nullptr},
   {"omod",    AMDGPUOperand::ImmTyOModSI, false, ConvertOmodMul},
@@ -4964,6 +5028,8 @@ unsigned AMDGPUAsmParser::validateTargetOperandClass(MCParsedAsmOperand &Op,
     return Operand.isGDS() ? Match_Success : Match_InvalidOperand;
   case MCK_glc:
     return Operand.isGLC() ? Match_Success : Match_InvalidOperand;
+  case MCK_d16:
+    return Operand.isD16() ? Match_Success : Match_InvalidOperand;
   case MCK_idxen:
     return Operand.isIdxen() ? Match_Success : Match_InvalidOperand;
   case MCK_offen:

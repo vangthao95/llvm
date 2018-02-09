@@ -8018,9 +8018,6 @@ bool X86InstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   case X86::VMOVUPSZ256mr_NOVLX:
     return expandNOVLXStore(MIB, &getRegisterInfo(), get(X86::VMOVUPSYmr),
                             get(X86::VEXTRACTF64x4Zmr), X86::sub_ymm);
-  case X86::TEST8ri_NOREX:
-    MI.setDesc(get(X86::TEST8ri));
-    return true;
   case X86::MOV32ri64:
     MI.setDesc(get(X86::MOV32ri));
     return true;
@@ -9226,6 +9223,30 @@ X86InstrInfo::unfoldMemoryOperand(SelectionDAG &DAG, SDNode *N,
   if (Load)
     BeforeOps.push_back(SDValue(Load, 0));
   BeforeOps.insert(BeforeOps.end(), AfterOps.begin(), AfterOps.end());
+  // Change CMP32ri r, 0 back to TEST32rr r, r, etc.
+  switch (Opc) {
+    default: break;
+    case X86::CMP64ri32:
+    case X86::CMP64ri8:
+    case X86::CMP32ri:
+    case X86::CMP32ri8:
+    case X86::CMP16ri:
+    case X86::CMP16ri8:
+    case X86::CMP8ri:
+      if (isNullConstant(BeforeOps[1])) {
+        switch (Opc) {
+          default: llvm_unreachable("Unreachable!");
+          case X86::CMP64ri8:
+          case X86::CMP64ri32: Opc = X86::TEST64rr; break;
+          case X86::CMP32ri8:
+          case X86::CMP32ri:   Opc = X86::TEST32rr; break;
+          case X86::CMP16ri8:
+          case X86::CMP16ri:   Opc = X86::TEST16rr; break;
+          case X86::CMP8ri:    Opc = X86::TEST8rr; break;
+        }
+        BeforeOps[1] = BeforeOps[0];
+      }
+  }
   SDNode *NewNode= DAG.getMachineNode(Opc, dl, VTs, BeforeOps);
   NewNodes.push_back(NewNode);
 

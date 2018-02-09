@@ -345,7 +345,7 @@ private:
   void constructArrayTypeDIE(DIE &Buffer, const DICompositeType *CTy);
   void constructArrayTypeDIE(DIE &Buffer, const DIFortranArrayType *ATy);
   void constructEnumTypeDIE(DIE &Buffer, const DICompositeType *CTy);
-  void constructMemberDIE(DIE &Buffer, const DIDerivedType *DT);
+  DIE &constructMemberDIE(DIE &Buffer, const DIDerivedType *DT);
   void constructTemplateTypeParameterDIE(DIE &Buffer,
                                          const DITemplateTypeParameter *TP);
   void constructTemplateValueParameterDIE(DIE &Buffer,

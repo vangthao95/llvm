@@ -191,6 +191,9 @@ DIE *DwarfCompileUnit::getOrCreateGlobalVariableDIE(
       DwarfExpr = llvm::make_unique<DIEDwarfExpression>(*Asm, *this, *Loc);
     }
 
+    if (Expr)
+      DwarfExpr->addFragmentOffset(Expr);
+
     if (Global) {
       const MCSymbol *Sym = Asm->getSymbol(Global);
       if (Global->isThreadLocal()) {
@@ -226,10 +229,8 @@ DIE *DwarfCompileUnit::getOrCreateGlobalVariableDIE(
         addOpAddress(*Loc, Sym);
       }
     }
-    if (Expr) {
-      DwarfExpr->addFragmentOffset(Expr);
+    if (Expr)
       DwarfExpr->addExpression(Expr);
-    }
   }
   if (Loc)
     addBlock(*VariableDIE, dwarf::DW_AT_location, DwarfExpr->finalize());
@@ -609,13 +610,41 @@ DIE *DwarfCompileUnit::constructVariableDIE(DbgVariable &DV,
   return Var;
 }
 
+/// Determine whether a variable appears in a count: expression.
+static bool dependsOn(DbgVariable *A, DbgVariable *B) {
+  auto *Array = dyn_cast<DICompositeType>(A->getType());
+  if (!Array || Array->getTag() != dwarf::DW_TAG_array_type)
+    return false;
+  return llvm::any_of(Array->getElements(), [&](DINode *El) {
+    if (auto *Subrange = dyn_cast<DISubrange>(El)) {
+      auto Count = Subrange->getCount();
+      if (auto *Var = Count.dyn_cast<DIVariable *>())
+        return Var == B->getVariable();
+    }
+    return false;
+  });
+}
+
+/// Sort local variables so that variables appearing inside of helper
+/// expressions come first.
+static bool sortLocalVars(DbgVariable *A, DbgVariable *B) {
+  return dependsOn(B, A);
+}
+
 DIE *DwarfCompileUnit::createScopeChildrenDIE(LexicalScope *Scope,
                                               SmallVectorImpl<DIE *> &Children,
                                               bool *HasNonScopeChildren) {
   assert(Children.empty());
   DIE *ObjectPointer = nullptr;
 
-  for (DbgVariable *DV : DU->getScopeVariables().lookup(Scope))
+  // Emit function arguments (order is significant).
+  auto Vars = DU->getScopeVariables().lookup(Scope);
+  for (auto &DV : Vars.Args)
+    Children.push_back(constructVariableDIE(*DV.second, *Scope, ObjectPointer));
+
+  // Emit local variables.
+  std::stable_sort(Vars.Locals.begin(), Vars.Locals.end(), sortLocalVars);
+  for (DbgVariable *DV : Vars.Locals)
     Children.push_back(constructVariableDIE(*DV, *Scope, ObjectPointer));
 
   // Skip imported directives in gmlt-like data.

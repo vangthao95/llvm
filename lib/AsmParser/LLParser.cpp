@@ -327,7 +327,8 @@ bool LLParser::ParseTargetDefinition() {
     if (ParseToken(lltok::equal, "expected '=' after target datalayout") ||
         ParseStringConstant(Str))
       return true;
-    M->setDataLayout(Str);
+    if (DataLayoutStr.empty())
+      M->setDataLayout(Str);
     return false;
   }
 }
@@ -3635,6 +3636,22 @@ struct MDSignedOrMDField : MDEitherFieldImpl<MDSignedField, MDField> {
   }
 };
 
+struct MDSignedOrUnsignedField
+    : MDEitherFieldImpl<MDSignedField, MDUnsignedField> {
+  MDSignedOrUnsignedField() : ImplTy(MDSignedField(0), MDUnsignedField(0)) {}
+
+  bool isMDSignedField() const { return WhatIs == IsTypeA; }
+  bool isMDUnsignedField() const { return WhatIs == IsTypeB; }
+  int64_t getMDSignedValue() const {
+    assert(isMDSignedField() && "Wrong field type");
+    return A.Val;
+  }
+  uint64_t getMDUnsignedValue() const {
+    assert(isMDUnsignedField() && "Wrong field type");
+    return B.Val;
+  }
+};
+
 } // end anonymous namespace
 
 namespace llvm {
@@ -3912,6 +3929,27 @@ bool LLParser::ParseMDField(LocTy Loc, StringRef Name,
 }
 
 template <>
+bool LLParser::ParseMDField(LocTy Loc, StringRef Name,
+                            MDSignedOrUnsignedField &Result) {
+  if (Lex.getKind() != lltok::APSInt)
+    return false;
+
+  if (Lex.getAPSIntVal().isSigned()) {
+    MDSignedField Res = Result.A;
+    if (ParseMDField(Loc, Name, Res))
+      return true;
+    Result.assign(Res);
+    return false;
+  }
+
+  MDUnsignedField Res = Result.B;
+  if (ParseMDField(Loc, Name, Res))
+    return true;
+  Result.assign(Res);
+  return false;
+}
+
+template <>
 bool LLParser::ParseMDField(LocTy Loc, StringRef Name, MDStringField &Result) {
   LocTy ValueLoc = Lex.getLoc();
   std::string S;
@@ -4098,15 +4136,24 @@ bool LLParser::ParseDIFortranSubrange(MDNode *&Result, bool IsDistinct) {
 
 
 /// ParseDIEnumerator:
-///   ::= !DIEnumerator(value: 30, name: "SomeKind")
+///   ::= !DIEnumerator(value: 30, isUnsigned: true, name: "SomeKind")
 bool LLParser::ParseDIEnumerator(MDNode *&Result, bool IsDistinct) {
 #define VISIT_MD_FIELDS(OPTIONAL, REQUIRED)                                    \
   REQUIRED(name, MDStringField, );                                             \
-  REQUIRED(value, MDSignedField, );
+  REQUIRED(value, MDSignedOrUnsignedField, );                                  \
+  OPTIONAL(isUnsigned, MDBoolField, (false));
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
 
-  Result = GET_OR_DISTINCT(DIEnumerator, (Context, value.Val, name.Val));
+  if (isUnsigned.Val && value.isMDSignedField())
+    return TokError("unsigned enumerator with negative value");
+
+  int64_t Value = value.isMDSignedField()
+                      ? value.getMDSignedValue()
+                      : static_cast<int64_t>(value.getMDUnsignedValue());
+  Result =
+      GET_OR_DISTINCT(DIEnumerator, (Context, Value, isUnsigned.Val, name.Val));
+
   return false;
 }
 
@@ -4197,7 +4244,8 @@ bool LLParser::ParseDICompositeType(MDNode *&Result, bool IsDistinct) {
   OPTIONAL(runtimeLang, DwarfLangField, );                                     \
   OPTIONAL(vtableHolder, MDField, );                                           \
   OPTIONAL(templateParams, MDField, );                                         \
-  OPTIONAL(identifier, MDStringField, );
+  OPTIONAL(identifier, MDStringField, );                                       \
+  OPTIONAL(discriminator, MDField, );
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
 
@@ -4207,7 +4255,7 @@ bool LLParser::ParseDICompositeType(MDNode *&Result, bool IsDistinct) {
             Context, *identifier.Val, tag.Val, name.Val, file.Val, line.Val,
             scope.Val, baseType.Val, size.Val, align.Val, offset.Val, flags.Val,
             elements.Val, runtimeLang.Val, vtableHolder.Val,
-            templateParams.Val)) {
+            templateParams.Val, discriminator.Val)) {
       Result = CT;
       return false;
     }
@@ -4218,7 +4266,8 @@ bool LLParser::ParseDICompositeType(MDNode *&Result, bool IsDistinct) {
       DICompositeType,
       (Context, tag.Val, name.Val, file.Val, line.Val, scope.Val, baseType.Val,
        size.Val, align.Val, offset.Val, flags.Val, elements.Val,
-       runtimeLang.Val, vtableHolder.Val, templateParams.Val, identifier.Val));
+       runtimeLang.Val, vtableHolder.Val, templateParams.Val, identifier.Val,
+       discriminator.Val));
   return false;
 }
 
@@ -6328,14 +6377,7 @@ int LLParser::ParseAlloc(Instruction *&Inst, PerFunctionState &PFS) {
   if (Size && !Size->getType()->isIntegerTy())
     return Error(SizeLoc, "element count must have integer type");
 
-  const DataLayout &DL = M->getDataLayout();
-  unsigned AS = DL.getAllocaAddrSpace();
-  if (AS != AddrSpace) {
-    // TODO: In the future it should be possible to specify addrspace per-alloca.
-    return Error(ASLoc, "address space must match datalayout");
-  }
-
-  AllocaInst *AI = new AllocaInst(Ty, AS, Size, Alignment);
+  AllocaInst *AI = new AllocaInst(Ty, AddrSpace, Size, Alignment);
   AI->setUsedWithInAlloca(IsInAlloca);
   AI->setSwiftError(IsSwiftError);
   Inst = AI;

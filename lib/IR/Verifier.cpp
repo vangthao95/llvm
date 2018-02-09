@@ -959,7 +959,8 @@ void Verifier::visitDICompositeType(const DICompositeType &N) {
                N.getTag() == dwarf::DW_TAG_structure_type ||
                N.getTag() == dwarf::DW_TAG_union_type ||
                N.getTag() == dwarf::DW_TAG_enumeration_type ||
-               N.getTag() == dwarf::DW_TAG_class_type,
+               N.getTag() == dwarf::DW_TAG_class_type ||
+               N.getTag() == dwarf::DW_TAG_variant_part,
            "invalid tag", &N);
 
   AssertDI(isScope(N.getRawScope()), "invalid scope", &N, N.getRawScope());
@@ -979,6 +980,11 @@ void Verifier::visitDICompositeType(const DICompositeType &N) {
       N.getTag() == dwarf::DW_TAG_union_type) {
     AssertDI(N.getFile() && !N.getFile()->getFilename().empty(),
              "class/union requires a filename", &N, N.getFile());
+  }
+
+  if (auto *D = N.getRawDiscriminator()) {
+    AssertDI(isa<DIDerivedType>(D) && N.getTag() == dwarf::DW_TAG_variant_part,
+             "discriminator can only appear on variant part");
   }
 }
 
@@ -4094,10 +4100,6 @@ void Verifier::visitIntrinsicCallSite(Intrinsic::ID ID, CallSite CS) {
       Assert(IsValidAlignment(MTI->getSourceAlignment()),
              "alignment of arg 1 of memory intrinsic must be 0 or a power of 2",
              CS);
-      // TODO: Remove this assert when we enhance IRBuilder API to create
-      //  memcpy/memmove with separate source & dest alignments.
-      Assert(MTI->getSourceAlignment() == MTI->getDestAlignment(),
-             "TEMPORARY: source and dest alignments must be the same");
     }
     Assert(isa<ConstantInt>(CS.getArgOperand(3)),
            "isvolatile argument of memory intrinsics must be a constant int",

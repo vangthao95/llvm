@@ -1340,13 +1340,19 @@ void BoUpSLP::buildTree(ArrayRef<Value *> Roots,
     // For each lane:
     for (int Lane = 0, LE = Entry->Scalars.size(); Lane != LE; ++Lane) {
       Value *Scalar = Entry->Scalars[Lane];
+      int FoundLane = Lane;
+      if (!Entry->ReuseShuffleIndices.empty()) {
+        FoundLane =
+            std::distance(Entry->ReuseShuffleIndices.begin(),
+                          llvm::find(Entry->ReuseShuffleIndices, FoundLane));
+      }
 
       // Check if the scalar is externally used as an extra arg.
       auto ExtI = ExternallyUsedValues.find(Scalar);
       if (ExtI != ExternallyUsedValues.end()) {
         DEBUG(dbgs() << "SLP: Need to extract: Extra arg from lane " <<
               Lane << " from " << *Scalar << ".\n");
-        ExternalUses.emplace_back(Scalar, nullptr, Lane);
+        ExternalUses.emplace_back(Scalar, nullptr, FoundLane);
       }
       for (User *U : Scalar->users()) {
         DEBUG(dbgs() << "SLP: Checking user:" << *U << ".\n");
@@ -1376,7 +1382,7 @@ void BoUpSLP::buildTree(ArrayRef<Value *> Roots,
 
         DEBUG(dbgs() << "SLP: Need to extract:" << *U << " from lane " <<
               Lane << " from " << *Scalar << ".\n");
-        ExternalUses.push_back(ExternalUser(Scalar, U, Lane));
+        ExternalUses.push_back(ExternalUser(Scalar, U, FoundLane));
       }
     }
   }
@@ -2836,6 +2842,11 @@ Value *BoUpSLP::Gather(ArrayRef<Value *> VL, VectorType *Ty) {
           }
         }
         assert(FoundLane >= 0 && "Could not find the correct lane");
+        if (!E->ReuseShuffleIndices.empty()) {
+          FoundLane =
+              std::distance(E->ReuseShuffleIndices.begin(),
+                            llvm::find(E->ReuseShuffleIndices, FoundLane));
+        }
         ExternalUses.push_back(ExternalUser(VL[i], Insrt, FoundLane));
       }
     }
@@ -4520,23 +4531,21 @@ static bool hasValueBeenRAUWed(ArrayRef<Value *> VL,
 
 bool SLPVectorizerPass::vectorizeStoreChain(ArrayRef<Value *> Chain, BoUpSLP &R,
                                             unsigned VecRegSize) {
-  unsigned ChainLen = Chain.size();
+  const unsigned ChainLen = Chain.size();
   DEBUG(dbgs() << "SLP: Analyzing a store chain of length " << ChainLen
         << "\n");
-  unsigned Sz = R.getVectorElementSize(Chain[0]);
-  unsigned VF = VecRegSize / Sz;
+  const unsigned Sz = R.getVectorElementSize(Chain[0]);
+  const unsigned VF = VecRegSize / Sz;
 
   if (!isPowerOf2_32(Sz) || VF < 2)
     return false;
 
   // Keep track of values that were deleted by vectorizing in the loop below.
-  SmallVector<WeakTrackingVH, 8> TrackValues(Chain.begin(), Chain.end());
+  const SmallVector<WeakTrackingVH, 8> TrackValues(Chain.begin(), Chain.end());
 
   bool Changed = false;
   // Look for profitable vectorizable trees at all offsets, starting at zero.
-  for (unsigned i = 0, e = ChainLen; i < e; ++i) {
-    if (i + VF > e)
-      break;
+  for (unsigned i = 0, e = ChainLen; i + VF <= e; ++i) {
 
     // Check that a previous iteration of this loop did not delete the Value.
     if (hasValueBeenRAUWed(Chain, TrackValues, i, VF))

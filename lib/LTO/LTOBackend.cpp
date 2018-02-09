@@ -399,6 +399,27 @@ Error lto::backend(Config &C, AddStreamFn AddStream,
   return Error::success();
 }
 
+static void dropDeadSymbols(Module &Mod, const GVSummaryMapTy &DefinedGlobals,
+                            const ModuleSummaryIndex &Index) {
+  std::vector<GlobalValue*> DeadGVs;
+  for (auto &GV : Mod.global_values())
+    if (GlobalValueSummary *GVS = DefinedGlobals.lookup(GV.getGUID()))
+      if (!Index.isGlobalValueLive(GVS)) {
+        DeadGVs.push_back(&GV);
+        convertToDeclaration(GV);
+      }
+
+  // Now that all dead bodies have been dropped, delete the actual objects
+  // themselves when possible.
+  for (GlobalValue *GV : DeadGVs) {
+    GV->removeDeadConstantUsers();
+    // Might reference something defined in native object (i.e. dropped a
+    // non-prevailing IR def, but we need to keep the declaration).
+    if (GV->use_empty())
+      GV->eraseFromParent();
+  }
+}
+
 Error lto::thinBackend(Config &Conf, unsigned Task, AddStreamFn AddStream,
                        Module &Mod, const ModuleSummaryIndex &CombinedIndex,
                        const FunctionImporter::ImportMapTy &ImportList,
@@ -419,6 +440,8 @@ Error lto::thinBackend(Config &Conf, unsigned Task, AddStreamFn AddStream,
     return Error::success();
 
   renameModuleForThinLTO(Mod, CombinedIndex);
+
+  dropDeadSymbols(Mod, DefinedGlobals, CombinedIndex);
 
   thinLTOResolveWeakForLinkerModule(Mod, DefinedGlobals);
 

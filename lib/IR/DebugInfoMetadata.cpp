@@ -272,12 +272,12 @@ DIFortranSubrange *DIFortranSubrange::getImpl(
 }
 
 DIEnumerator *DIEnumerator::getImpl(LLVMContext &Context, int64_t Value,
-                                    MDString *Name, StorageType Storage,
-                                    bool ShouldCreate) {
+                                    bool IsUnsigned, MDString *Name,
+                                    StorageType Storage, bool ShouldCreate) {
   assert(isCanonical(Name) && "Expected canonical MDString");
-  DEFINE_GETIMPL_LOOKUP(DIEnumerator, (Value, Name));
+  DEFINE_GETIMPL_LOOKUP(DIEnumerator, (Value, IsUnsigned, Name));
   Metadata *Ops[] = {Name};
-  DEFINE_GETIMPL_STORE(DIEnumerator, (Value), Ops);
+  DEFINE_GETIMPL_STORE(DIEnumerator, (Value, IsUnsigned), Ops);
 }
 
 DIBasicType *DIBasicType::getImpl(LLVMContext &Context, unsigned Tag,
@@ -329,17 +329,18 @@ DICompositeType *DICompositeType::getImpl(
     unsigned Line, Metadata *Scope, Metadata *BaseType, uint64_t SizeInBits,
     uint32_t AlignInBits, uint64_t OffsetInBits, DIFlags Flags,
     Metadata *Elements, unsigned RuntimeLang, Metadata *VTableHolder,
-    Metadata *TemplateParams, MDString *Identifier, StorageType Storage,
-    bool ShouldCreate) {
+    Metadata *TemplateParams, MDString *Identifier, Metadata *Discriminator,
+    StorageType Storage, bool ShouldCreate) {
   assert(isCanonical(Name) && "Expected canonical MDString");
 
   // Keep this in sync with buildODRType.
   DEFINE_GETIMPL_LOOKUP(
       DICompositeType, (Tag, Name, File, Line, Scope, BaseType, SizeInBits,
                         AlignInBits, OffsetInBits, Flags, Elements, RuntimeLang,
-                        VTableHolder, TemplateParams, Identifier));
+                        VTableHolder, TemplateParams, Identifier, Discriminator));
   Metadata *Ops[] = {File,     Scope,        Name,           BaseType,
-                     Elements, VTableHolder, TemplateParams, Identifier};
+                     Elements, VTableHolder, TemplateParams, Identifier,
+                     Discriminator};
   DEFINE_GETIMPL_STORE(DICompositeType, (Tag, Line, RuntimeLang, SizeInBits,
                                          AlignInBits, OffsetInBits, Flags),
                        Ops);
@@ -366,7 +367,7 @@ DICompositeType *DICompositeType::buildODRType(
     Metadata *File, unsigned Line, Metadata *Scope, Metadata *BaseType,
     uint64_t SizeInBits, uint32_t AlignInBits, uint64_t OffsetInBits,
     DIFlags Flags, Metadata *Elements, unsigned RuntimeLang,
-    Metadata *VTableHolder, Metadata *TemplateParams) {
+    Metadata *VTableHolder, Metadata *TemplateParams, Metadata *Discriminator) {
   assert(!Identifier.getString().empty() && "Expected valid identifier");
   if (!Context.isODRUniquingDebugTypes())
     return nullptr;
@@ -375,7 +376,7 @@ DICompositeType *DICompositeType::buildODRType(
     return CT = DICompositeType::getDistinct(
                Context, Tag, Name, File, Line, Scope, BaseType, SizeInBits,
                AlignInBits, OffsetInBits, Flags, Elements, RuntimeLang,
-               VTableHolder, TemplateParams, &Identifier);
+               VTableHolder, TemplateParams, &Identifier, Discriminator);
 
   // Only mutate CT if it's a forward declaration and the new operands aren't.
   assert(CT->getRawIdentifier() == &Identifier && "Wrong ODR identifier?");
@@ -386,7 +387,8 @@ DICompositeType *DICompositeType::buildODRType(
   CT->mutate(Tag, Line, RuntimeLang, SizeInBits, AlignInBits, OffsetInBits,
              Flags);
   Metadata *Ops[] = {File,     Scope,        Name,           BaseType,
-                     Elements, VTableHolder, TemplateParams, &Identifier};
+                     Elements, VTableHolder, TemplateParams, &Identifier,
+                     Discriminator};
   assert((std::end(Ops) - std::begin(Ops)) == (int)CT->getNumOperands() &&
          "Mismatched number of operands");
   for (unsigned I = 0, E = CT->getNumOperands(); I != E; ++I)
@@ -400,7 +402,7 @@ DICompositeType *DICompositeType::getODRType(
     Metadata *File, unsigned Line, Metadata *Scope, Metadata *BaseType,
     uint64_t SizeInBits, uint32_t AlignInBits, uint64_t OffsetInBits,
     DIFlags Flags, Metadata *Elements, unsigned RuntimeLang,
-    Metadata *VTableHolder, Metadata *TemplateParams) {
+    Metadata *VTableHolder, Metadata *TemplateParams, Metadata *Discriminator) {
   assert(!Identifier.getString().empty() && "Expected valid identifier");
   if (!Context.isODRUniquingDebugTypes())
     return nullptr;
@@ -409,7 +411,7 @@ DICompositeType *DICompositeType::getODRType(
     CT = DICompositeType::getDistinct(
         Context, Tag, Name, File, Line, Scope, BaseType, SizeInBits,
         AlignInBits, OffsetInBits, Flags, Elements, RuntimeLang, VTableHolder,
-        TemplateParams, &Identifier);
+        TemplateParams, &Identifier, Discriminator);
   return CT;
 }
 
