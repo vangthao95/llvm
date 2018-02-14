@@ -11,6 +11,10 @@
 ; RUN: llc < %s -mtriple=thumbv7-none-eabi -mattr=+vfp4        | FileCheck %s --check-prefixes=CHECK,CHECK-SOFTFP-FP16
 ; RUN: llc < %s -mtriple=thumbv7-none-eabi -mattr=+fullfp16    | FileCheck %s --check-prefixes=CHECK,CHECK-SOFTFP-FULLFP16
 
+; Test fast-isel
+; RUN: llc < %s -mtriple=arm-none-eabi -mattr=+fullfp16 -O0 | FileCheck %s --check-prefixes=CHECK-SPILL-RELOAD
+; RUN: llc < %s -mtriple=thumbv7-none-eabi -mattr=+fullfp16 -O0 | FileCheck %s --check-prefixes=CHECK-SPILL-RELOAD
+
 ; HARD:
 ; RUN: llc < %s -mtriple=arm-none-eabihf -mattr=+vfp3      | FileCheck %s --check-prefixes=CHECK,CHECK-HARDFP-VFP3
 ; RUN: llc < %s -mtriple=arm-none-eabihf -mattr=+vfp4      | FileCheck %s --check-prefixes=CHECK,CHECK-HARDFP-FP16
@@ -695,3 +699,49 @@ entry:
 
 ; CHECK-HARDFP-FULLFP16:       vsub.f16  s0, s0, s1
 }
+
+; Check for VSTRH with a FCONSTH, this checks that addressing mode
+; AddrMode5FP16 is supported.
+define i32 @ThumbAddrMode5FP16(i32 %A.coerce) {
+entry:
+  %S = alloca half, align 2
+  %tmp.0.extract.trunc = trunc i32 %A.coerce to i16
+  %0 = bitcast i16 %tmp.0.extract.trunc to half
+  %S.0.S.0..sroa_cast = bitcast half* %S to i8*
+  store volatile half 0xH3C00, half* %S, align 2
+  %S.0.S.0. = load volatile half, half* %S, align 2
+  %add = fadd half %S.0.S.0., %0
+  %1 = bitcast half %add to i16
+  %tmp2.0.insert.ext = zext i16 %1 to i32
+  ret i32 %tmp2.0.insert.ext
+
+; CHECK-LABEL:            ThumbAddrMode5FP16
+
+; CHECK-SOFTFP-FULLFP16:  vmov.f16    [[S0:s[0-9]]], #1.000000e+00
+; CHECK-SOFTFP-FULLFP16:  vstr.16     [[S0]], [sp, #{{.}}]
+; CHECK-SOFTFP-FULLFP16:  vmov.f16    [[S0_2:s[0-9]]], r0
+; CHECK-SOFTFP-FULLFP16:  vldr.16     [[S2:s[0-9]]], [sp, #{{.}}]
+; CHECK-SOFTFP-FULLFP16:  vadd.f16    s{{.}}, [[S2]], [[S0_2]]
+}
+
+; Test function calls to check store/load reg to/from stack
+define i32 @fn1() {
+entry:
+  %coerce = alloca half, align 2
+  %tmp2 = alloca i32, align 4
+  store half 0xH7C00, half* %coerce, align 2
+  %0 = load i32, i32* %tmp2, align 4
+  %call = call i32 bitcast (i32 (...)* @fn2 to i32 (i32)*)(i32 %0)
+  store half 0xH7C00, half* %coerce, align 2
+  %1 = load i32, i32* %tmp2, align 4
+  %call3 = call i32 bitcast (i32 (...)* @fn3 to i32 (i32)*)(i32 %1)
+  ret i32 %call3
+
+; CHECK-SPILL-RELOAD-LABEL: fn1:
+; CHECK-SPILL-RELOAD:       vstr.16 s0, [sp, #{{.}}]  @ 2-byte Spill
+; CHECK-SPILL-RELOAD-NEXT:  bl  fn2
+; CHECK-SPILL-RELOAD-NEXT:  vldr.16 s0, [sp, #{{.}}]  @ 2-byte Reload
+}
+
+declare dso_local i32 @fn2(...)
+declare dso_local i32 @fn3(...)
