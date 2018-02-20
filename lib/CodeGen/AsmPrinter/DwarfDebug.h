@@ -257,6 +257,9 @@ class DwarfDebug : public DebugHandlerBase {
   /// Whether to emit all linkage names, or just abstract subprograms.
   bool UseAllLinkageNames;
 
+  /// Use inlined strings.
+  bool UseInlineStrings = false;
+
   /// DWARF5 Experimental Options
   /// @{
   bool HasDwarfAccelTables;
@@ -300,10 +303,10 @@ class DwarfDebug : public DebugHandlerBase {
   AddressPool AddrPool;
 
   /// Apple accelerator tables.
-  AppleAccelTable<AppleAccelTableOffsetData> AccelNames;
-  AppleAccelTable<AppleAccelTableOffsetData> AccelObjC;
-  AppleAccelTable<AppleAccelTableOffsetData> AccelNamespace;
-  AppleAccelTable<AppleAccelTableTypeData> AccelTypes;
+  AccelTable<AppleAccelTableOffsetData> AccelNames;
+  AccelTable<AppleAccelTableOffsetData> AccelObjC;
+  AccelTable<AppleAccelTableOffsetData> AccelNamespace;
+  AccelTable<AppleAccelTableTypeData> AccelTypes;
 
   // Identify a debugger for "tuning" the debug info.
   DebuggerKind DebuggerTuning = DebuggerKind::Default;
@@ -506,6 +509,9 @@ public:
   /// Returns whether to use the DWARF2 format for bitfields instyead of the
   /// DWARF4 format.
   bool useDWARF2Bitfields() const { return UseDWARF2Bitfields; }
+
+  /// Returns whether to use inline strings.
+  bool useInlineStrings() const { return UseInlineStrings; }
 
   // Experimental DWARF5 features.
 
