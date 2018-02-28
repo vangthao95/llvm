@@ -890,11 +890,6 @@ void Verifier::visitDIStringType(const DIStringType &N) {
            "invalid tag", &N);
 }
 
-void Verifier::visitDIStringType(const DIStringType &N) {
-  AssertDI( N.getTag() == dwarf::DW_TAG_string_type,
-           "invalid tag", &N);
-}
-
 void Verifier::visitDIDerivedType(const DIDerivedType &N) {
   // Common scope checks.
   visitDIScope(N);
