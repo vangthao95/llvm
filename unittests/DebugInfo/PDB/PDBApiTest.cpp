@@ -11,6 +11,8 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/DebugInfo/PDB/IPDBEnumChildren.h"
+#include "llvm/DebugInfo/PDB/IPDBInjectedSource.h"
+#include "llvm/DebugInfo/PDB/IPDBLineNumber.h"
 #include "llvm/DebugInfo/PDB/IPDBRawSymbol.h"
 #include "llvm/DebugInfo/PDB/IPDBSession.h"
 #include "llvm/DebugInfo/PDB/IPDBSourceFile.h"
@@ -123,6 +125,10 @@ class MockSession : public IPDBSession {
   std::unique_ptr<IPDBEnumTables> getEnumTables() const override {
     return nullptr;
   }
+
+  std::unique_ptr<IPDBEnumInjectedSources> getInjectedSources() const override {
+    return nullptr;
+  }
 };
 
 class MockRawSymbol : public IPDBRawSymbol {
@@ -193,6 +199,10 @@ public:
 
   std::string getUndecoratedNameEx(PDB_UndnameFlags Flags) const override {
     return {};
+  }
+
+  std::unique_ptr<IPDBLineNumber> getSrcLineOnTypeDefn() const override {
+    return nullptr;
   }
 
   MOCK_SYMBOL_ACCESSOR(getAccess)

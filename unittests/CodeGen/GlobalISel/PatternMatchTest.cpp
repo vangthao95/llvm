@@ -230,6 +230,71 @@ TEST(PatternMatchInstr, MatchBinaryOp) {
   ASSERT_EQ(Src1, Copies[1]);
 }
 
+TEST(PatternMatchInstr, MatchFPUnaryOp) {
+  LLVMContext Context;
+  std::unique_ptr<TargetMachine> TM = createTargetMachine();
+  if (!TM)
+    return;
+  auto ModuleMMIPair = createDummyModule(Context, *TM, "");
+  MachineFunction *MF =
+      getMFFromMMI(ModuleMMIPair.first.get(), ModuleMMIPair.second.get());
+  SmallVector<unsigned, 4> Copies;
+  collectCopies(Copies, MF);
+  MachineBasicBlock *EntryMBB = &*MF->begin();
+  MachineIRBuilder B(*MF);
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+  B.setInsertPt(*EntryMBB, EntryMBB->end());
+
+  // Truncate s64 to s32.
+  LLT s32 = LLT::scalar(32);
+  auto Copy0s32 = B.buildFPTrunc(s32, Copies[0]);
+
+  // Match G_FABS.
+  auto MIBFabs = B.buildInstr(TargetOpcode::G_FABS, s32, Copy0s32);
+  bool match = mi_match(MIBFabs->getOperand(0).getReg(), MRI, m_GFabs(m_Reg()));
+  ASSERT_TRUE(match);
+  unsigned Src;
+  match = mi_match(MIBFabs->getOperand(0).getReg(), MRI, m_GFabs(m_Reg(Src)));
+  ASSERT_TRUE(match);
+  ASSERT_EQ(Src, Copy0s32->getOperand(0).getReg());
+
+  // Build and match FConstant.
+  auto MIBFCst = B.buildFConstant(s32, .5);
+  const ConstantFP *TmpFP{};
+  match = mi_match(MIBFCst->getOperand(0).getReg(), MRI, m_GFCst(TmpFP));
+  ASSERT_TRUE(match);
+  ASSERT_TRUE(TmpFP);
+  APFloat APF((float).5);
+  auto *CFP = ConstantFP::get(Context, APF);
+  ASSERT_EQ(CFP, TmpFP);
+
+  // Build double float.
+  LLT s64 = LLT::scalar(64);
+  auto MIBFCst64 = B.buildFConstant(s64, .5);
+  const ConstantFP *TmpFP64{};
+  match = mi_match(MIBFCst64->getOperand(0).getReg(), MRI, m_GFCst(TmpFP64));
+  ASSERT_TRUE(match);
+  ASSERT_TRUE(TmpFP64);
+  APFloat APF64(.5);
+  auto CFP64 = ConstantFP::get(Context, APF64);
+  ASSERT_EQ(CFP64, TmpFP64);
+  ASSERT_NE(TmpFP64, TmpFP);
+
+  // Build half float.
+  LLT s16 = LLT::scalar(16);
+  auto MIBFCst16 = B.buildFConstant(s16, .5);
+  const ConstantFP *TmpFP16{};
+  match = mi_match(MIBFCst16->getOperand(0).getReg(), MRI, m_GFCst(TmpFP16));
+  ASSERT_TRUE(match);
+  ASSERT_TRUE(TmpFP16);
+  bool Ignored;
+  APFloat APF16(.5);
+  APF16.convert(APFloat::IEEEhalf(), APFloat::rmNearestTiesToEven, &Ignored);
+  auto CFP16 = ConstantFP::get(Context, APF16);
+  ASSERT_EQ(TmpFP16, CFP16);
+  ASSERT_NE(TmpFP16, TmpFP);
+}
+
 TEST(PatternMatchInstr, MatchExtendsTrunc) {
   LLVMContext Context;
   std::unique_ptr<TargetMachine> TM = createTargetMachine();
