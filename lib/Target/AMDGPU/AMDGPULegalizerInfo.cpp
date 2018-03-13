@@ -23,7 +23,8 @@
 using namespace llvm;
 using namespace LegalizeActions;
 
-AMDGPULegalizerInfo::AMDGPULegalizerInfo() {
+AMDGPULegalizerInfo::AMDGPULegalizerInfo(const SISubtarget &ST,
+                                         const GCNTargetMachine &TM) {
   using namespace TargetOpcode;
 
   const LLT S1= LLT::scalar(1);
@@ -34,7 +35,10 @@ AMDGPULegalizerInfo::AMDGPULegalizerInfo() {
   const LLT P2 = LLT::pointer(AMDGPUAS::CONSTANT_ADDRESS, 64);
 
   setAction({G_ADD, S32}, Legal);
+  setAction({G_MUL, S32}, Legal);
   setAction({G_AND, S32}, Legal);
+  setAction({G_OR, S32}, Legal);
+  setAction({G_XOR, S32}, Legal);
 
   setAction({G_BITCAST, V2S16}, Legal);
   setAction({G_BITCAST, 1, S32}, Legal);
@@ -50,10 +54,24 @@ AMDGPULegalizerInfo::AMDGPULegalizerInfo() {
   setAction({G_CONSTANT, S64}, Legal);
 
   setAction({G_FCONSTANT, S32}, Legal);
+  setAction({G_FCONSTANT, S64}, Legal);
+
+  setAction({G_IMPLICIT_DEF, S32}, Legal);
+  setAction({G_IMPLICIT_DEF, S64}, Legal);
 
   setAction({G_FADD, S32}, Legal);
 
+  setAction({G_FCMP, S1}, Legal);
+  setAction({G_FCMP, 1, S32}, Legal);
+  setAction({G_FCMP, 1, S64}, Legal);
+
   setAction({G_FMUL, S32}, Legal);
+
+  setAction({G_ZEXT, S64}, Legal);
+  setAction({G_ZEXT, 1, S32}, Legal);
+
+  setAction({G_FPTOSI, S32}, Legal);
+  setAction({G_FPTOSI, 1, S32}, Legal);
 
   setAction({G_FPTOUI, S32}, Legal);
   setAction({G_FPTOUI, 1, S32}, Legal);
@@ -70,8 +88,6 @@ AMDGPULegalizerInfo::AMDGPULegalizerInfo() {
   setAction({G_LOAD, S32}, Legal);
   setAction({G_LOAD, 1, P1}, Legal);
   setAction({G_LOAD, 1, P2}, Legal);
-
-  setAction({G_OR, S32}, Legal);
 
   setAction({G_SELECT, S32}, Legal);
   setAction({G_SELECT, 1, S1}, Legal);
@@ -90,6 +106,56 @@ AMDGPULegalizerInfo::AMDGPULegalizerInfo() {
   setAction({G_GEP, S64}, Legal);
   setAction({G_LOAD, 1, S64}, Legal);
   setAction({G_STORE, 1, S64}, Legal);
+
+  for (unsigned Op : {G_EXTRACT_VECTOR_ELT, G_INSERT_VECTOR_ELT}) {
+    getActionDefinitionsBuilder(Op)
+      .legalIf([=](const LegalityQuery &Query) {
+          const LLT &VecTy = Query.Types[1];
+          const LLT &IdxTy = Query.Types[2];
+          return VecTy.getSizeInBits() % 32 == 0 &&
+            VecTy.getSizeInBits() <= 512 &&
+            IdxTy.getSizeInBits() == 32;
+        });
+  }
+
+  // FIXME: Doesn't handle extract of illegal sizes.
+  getActionDefinitionsBuilder(G_EXTRACT)
+    .unsupportedIf([=](const LegalityQuery &Query) {
+        return Query.Types[0].getSizeInBits() >= Query.Types[1].getSizeInBits();
+      })
+    .legalIf([=](const LegalityQuery &Query) {
+        const LLT &Ty0 = Query.Types[0];
+        const LLT &Ty1 = Query.Types[1];
+        return (Ty0.getSizeInBits() % 32 == 0) &&
+               (Ty1.getSizeInBits() % 32 == 0);
+      });
+
+  // Merge/Unmerge
+  for (unsigned Op : {G_MERGE_VALUES, G_UNMERGE_VALUES}) {
+    unsigned BigTyIdx = Op == G_MERGE_VALUES ? 0 : 1;
+    unsigned LitTyIdx = Op == G_MERGE_VALUES ? 1 : 0;
+
+    getActionDefinitionsBuilder(Op)
+      .legalIf([=](const LegalityQuery &Query) {
+          const LLT &BigTy = Query.Types[BigTyIdx];
+          const LLT &LitTy = Query.Types[LitTyIdx];
+          return BigTy.getSizeInBits() % 32 == 0 &&
+                 LitTy.getSizeInBits() % 32 == 0 &&
+                 BigTy.getSizeInBits() <= 512;
+        })
+      // Any vectors left are the wrong size. Scalarize them.
+      .fewerElementsIf([](const LegalityQuery &Query) { return true; },
+                       [](const LegalityQuery &Query) {
+                         return std::make_pair(
+                           0, Query.Types[0].getElementType());
+                       })
+      .fewerElementsIf([](const LegalityQuery &Query) { return true; },
+                       [](const LegalityQuery &Query) {
+                         return std::make_pair(
+                           1, Query.Types[1].getElementType());
+                       });
+
+  }
 
   computeTables();
 }

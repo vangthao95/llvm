@@ -99,18 +99,6 @@ static uint8_t readVaruint1(const uint8_t *&Ptr) {
   return result;
 }
 
-static int8_t readVarint7(const uint8_t *&Ptr) {
-  int64_t result = readLEB128(Ptr);
-  assert(result <= VARINT7_MAX && result >= VARINT7_MIN);
-  return result;
-}
-
-static uint8_t readVaruint7(const uint8_t *&Ptr) {
-  uint64_t result = readULEB128(Ptr);
-  assert(result <= VARUINT7_MAX);
-  return result;
-}
-
 static int32_t readVarint32(const uint8_t *&Ptr) {
   int64_t result = readLEB128(Ptr);
   assert(result <= INT32_MAX && result >= INT32_MIN);
@@ -174,7 +162,7 @@ static wasm::WasmLimits readLimits(const uint8_t *&Ptr) {
 
 static wasm::WasmTable readTable(const uint8_t *&Ptr) {
   wasm::WasmTable Table;
-  Table.ElemType = readVarint7(Ptr);
+  Table.ElemType = readUint8(Ptr);
   Table.Limits = readLimits(Ptr);
   return Table;
 }
@@ -182,7 +170,7 @@ static wasm::WasmTable readTable(const uint8_t *&Ptr) {
 static Error readSection(WasmSection &Section, const uint8_t *&Ptr,
                          const uint8_t *Start, const uint8_t *Eof) {
   Section.Offset = Ptr - Start;
-  Section.Type = readVaruint7(Ptr);
+  Section.Type = readUint8(Ptr);
   uint32_t Size = readVaruint32(Ptr);
   if (Size == 0)
     return make_error<StringError>("Zero length section",
@@ -197,8 +185,6 @@ static Error readSection(WasmSection &Section, const uint8_t *&Ptr,
 
 WasmObjectFile::WasmObjectFile(MemoryBufferRef Buffer, Error &Err)
     : ObjectFile(Binary::ID_Wasm, Buffer) {
-  LinkingData.DataSize = 0;
-
   ErrorAsOutParameter ErrAsOutParam(&Err);
   Header.Magic = getData().substr(0, 4);
   if (Header.Magic != StringRef("\0asm", 4)) {
@@ -276,7 +262,7 @@ Error WasmObjectFile::parseNameSection(const uint8_t *Ptr, const uint8_t *End) {
   }
 
   while (Ptr < End) {
-    uint8_t Type = readVarint7(Ptr);
+    uint8_t Type = readUint8(Ptr);
     uint32_t Size = readVaruint32(Ptr);
     const uint8_t *SubSectionEnd = Ptr + Size;
     switch (Type) {
@@ -326,16 +312,13 @@ Error WasmObjectFile::parseLinkingSection(const uint8_t *Ptr,
   }
 
   while (Ptr < End) {
-    uint8_t Type = readVarint7(Ptr);
+    uint8_t Type = readUint8(Ptr);
     uint32_t Size = readVaruint32(Ptr);
     const uint8_t *SubSectionEnd = Ptr + Size;
     switch (Type) {
     case wasm::WASM_SYMBOL_TABLE:
       if (Error Err = parseLinkingSectionSymtab(Ptr, SubSectionEnd))
         return Err;
-      break;
-    case wasm::WASM_DATA_SIZE:
-      LinkingData.DataSize = readVaruint32(Ptr);
       break;
     case wasm::WASM_SEGMENT_INFO: {
       uint32_t Count = readVaruint32(Ptr);
@@ -356,7 +339,7 @@ Error WasmObjectFile::parseLinkingSection(const uint8_t *Ptr,
         wasm::WasmInitFunc Init;
         Init.Priority = readVaruint32(Ptr);
         Init.Symbol = readVaruint32(Ptr);
-        if (!isValidFunctionSymbolIndex(Init.Symbol))
+        if (!isValidFunctionSymbol(Init.Symbol))
           return make_error<GenericBinaryError>("Invalid function symbol: " +
                                                     Twine(Init.Symbol),
                                                 object_error::parse_failed);
@@ -420,7 +403,7 @@ Error WasmObjectFile::parseLinkingSectionSymtab(const uint8_t *&Ptr,
         Info.Name = readString(Ptr);
         unsigned FuncIndex = Info.ElementIndex - NumImportedFunctions;
         FunctionType = &Signatures[FunctionTypes[FuncIndex]];
-        auto &Function = Functions[FuncIndex];
+        wasm::WasmFunction &Function = Functions[FuncIndex];
         if (Function.Name.empty()) {
           // Use the symbol's name to set a name for the Function, but only if
           // one hasn't already been set.
@@ -439,10 +422,21 @@ Error WasmObjectFile::parseLinkingSectionSymtab(const uint8_t *&Ptr,
           IsDefined != isDefinedGlobalIndex(Info.ElementIndex))
         return make_error<GenericBinaryError>("invalid global symbol index",
                                               object_error::parse_failed);
+      if (!IsDefined &&
+          (Info.Flags & wasm::WASM_SYMBOL_BINDING_MASK) ==
+              wasm::WASM_SYMBOL_BINDING_WEAK)
+        return make_error<GenericBinaryError>("undefined weak global symbol",
+                                              object_error::parse_failed);
       if (IsDefined) {
         Info.Name = readString(Ptr);
         unsigned GlobalIndex = Info.ElementIndex - NumImportedGlobals;
-        GlobalType = &Globals[GlobalIndex].Type;
+        wasm::WasmGlobal &Global = Globals[GlobalIndex];
+        GlobalType = &Global.Type;
+        if (Global.Name.empty()) {
+          // Use the symbol's name to set a name for the Global, but only if
+          // one hasn't already been set.
+          Global.Name = Info.Name;
+        }
       } else {
         wasm::WasmImport &Import = *ImportedGlobals[Info.ElementIndex];
         Info.Name = Import.Field;
@@ -460,7 +454,7 @@ Error WasmObjectFile::parseLinkingSectionSymtab(const uint8_t *&Ptr,
         uint32_t Offset = readVaruint32(Ptr);
         uint32_t Size = readVaruint32(Ptr);
         if (Offset + Size > DataSegments[Index].Data.Content.size())
-          return make_error<GenericBinaryError>("invalid data symbol index",
+          return make_error<GenericBinaryError>("invalid data symbol offset",
                                                 object_error::parse_failed);
         Info.DataRef = wasm::WasmDataReference{Index, Offset, Size};
       }
@@ -553,7 +547,7 @@ WasmSection* WasmObjectFile::findSectionByType(uint32_t Type) {
 
 Error WasmObjectFile::parseRelocSection(StringRef Name, const uint8_t *Ptr,
                                         const uint8_t *End) {
-  uint8_t SectionCode = readVarint7(Ptr);
+  uint8_t SectionCode = readUint8(Ptr);
   WasmSection* Section = nullptr;
   if (SectionCode == wasm::WASM_SEC_CUSTOM) {
     StringRef Name = readString(Ptr);
@@ -565,9 +559,9 @@ Error WasmObjectFile::parseRelocSection(StringRef Name, const uint8_t *Ptr,
     return make_error<GenericBinaryError>("Invalid section code",
                                           object_error::parse_failed);
   uint32_t RelocCount = readVaruint32(Ptr);
+  uint32_t EndOffset = Section->Content.size();
   while (RelocCount--) {
-    wasm::WasmRelocation Reloc;
-    memset(&Reloc, 0, sizeof(Reloc));
+    wasm::WasmRelocation Reloc = {};
     Reloc.Type = readVaruint32(Ptr);
     Reloc.Offset = readVaruint32(Ptr);
     Reloc.Index = readVaruint32(Ptr);
@@ -575,12 +569,26 @@ Error WasmObjectFile::parseRelocSection(StringRef Name, const uint8_t *Ptr,
     case wasm::R_WEBASSEMBLY_FUNCTION_INDEX_LEB:
     case wasm::R_WEBASSEMBLY_TABLE_INDEX_SLEB:
     case wasm::R_WEBASSEMBLY_TABLE_INDEX_I32:
+      if (!isValidFunctionSymbol(Reloc.Index))
+        return make_error<GenericBinaryError>("Bad relocation function index",
+                                              object_error::parse_failed);
+      break;
     case wasm::R_WEBASSEMBLY_TYPE_INDEX_LEB:
+      if (Reloc.Index >= Signatures.size())
+        return make_error<GenericBinaryError>("Bad relocation type index",
+                                              object_error::parse_failed);
+      break;
     case wasm::R_WEBASSEMBLY_GLOBAL_INDEX_LEB:
+      if (!isValidGlobalSymbol(Reloc.Index))
+        return make_error<GenericBinaryError>("Bad relocation global index",
+                                              object_error::parse_failed);
       break;
     case wasm::R_WEBASSEMBLY_MEMORY_ADDR_LEB:
     case wasm::R_WEBASSEMBLY_MEMORY_ADDR_SLEB:
     case wasm::R_WEBASSEMBLY_MEMORY_ADDR_I32:
+      if (!isValidDataSymbol(Reloc.Index))
+        return make_error<GenericBinaryError>("Bad relocation data index",
+                                              object_error::parse_failed);
       Reloc.Addend = readVarint32(Ptr);
       break;
     default:
@@ -588,6 +596,18 @@ Error WasmObjectFile::parseRelocSection(StringRef Name, const uint8_t *Ptr,
                                                 Twine(Reloc.Type),
                                             object_error::parse_failed);
     }
+
+    // Relocations must fit inside the section, and must appear in order.  They
+    // also shouldn't overlap a function/element boundary, but we don't bother
+    // to check that.
+    uint64_t Size = 5;
+    if (Reloc.Type == wasm::R_WEBASSEMBLY_TABLE_INDEX_I32 ||
+        Reloc.Type == wasm::R_WEBASSEMBLY_MEMORY_ADDR_I32)
+      Size = 4;
+    if (Reloc.Offset + Size > EndOffset)
+      return make_error<GenericBinaryError>("Bad relocation offset",
+                                            object_error::parse_failed);
+
     Section->Relocations.push_back(Reloc);
   }
   if (Ptr != End)
@@ -618,7 +638,7 @@ Error WasmObjectFile::parseTypeSection(const uint8_t *Ptr, const uint8_t *End) {
   while (Count--) {
     wasm::WasmSignature Sig;
     Sig.ReturnType = wasm::WASM_TYPE_NORESULT;
-    int8_t Form = readVarint7(Ptr);
+    uint8_t Form = readUint8(Ptr);
     if (Form != wasm::WASM_TYPE_FUNC) {
       return make_error<GenericBinaryError>("Invalid signature type",
                                             object_error::parse_failed);
@@ -626,7 +646,7 @@ Error WasmObjectFile::parseTypeSection(const uint8_t *Ptr, const uint8_t *End) {
     uint32_t ParamCount = readVaruint32(Ptr);
     Sig.ParamTypes.reserve(ParamCount);
     while (ParamCount--) {
-      uint32_t ParamType = readVarint7(Ptr);
+      uint32_t ParamType = readUint8(Ptr);
       Sig.ParamTypes.push_back(ParamType);
     }
     uint32_t ReturnCount = readVaruint32(Ptr);
@@ -635,7 +655,7 @@ Error WasmObjectFile::parseTypeSection(const uint8_t *Ptr, const uint8_t *End) {
         return make_error<GenericBinaryError>(
             "Multiple return types not supported", object_error::parse_failed);
       }
-      Sig.ReturnType = readVarint7(Ptr);
+      Sig.ReturnType = readUint8(Ptr);
     }
     Signatures.push_back(Sig);
   }
@@ -660,7 +680,7 @@ Error WasmObjectFile::parseImportSection(const uint8_t *Ptr, const uint8_t *End)
       break;
     case wasm::WASM_EXTERNAL_GLOBAL:
       NumImportedGlobals++;
-      Im.Global.Type = readVarint7(Ptr);
+      Im.Global.Type = readUint8(Ptr);
       Im.Global.Mutable = readVaruint1(Ptr);
       break;
     case wasm::WASM_EXTERNAL_MEMORY:
@@ -687,8 +707,13 @@ Error WasmObjectFile::parseImportSection(const uint8_t *Ptr, const uint8_t *End)
 Error WasmObjectFile::parseFunctionSection(const uint8_t *Ptr, const uint8_t *End) {
   uint32_t Count = readVaruint32(Ptr);
   FunctionTypes.reserve(Count);
+  uint32_t NumTypes = Signatures.size();
   while (Count--) {
-    FunctionTypes.push_back(readVaruint32(Ptr));
+    uint32_t Type = readVaruint32(Ptr);
+    if (Type >= NumTypes)
+      return make_error<GenericBinaryError>("Invalid function type",
+                                            object_error::parse_failed);
+    FunctionTypes.push_back(Type);
   }
   if (Ptr != End)
     return make_error<GenericBinaryError>("Function section ended prematurely",
@@ -731,7 +756,7 @@ Error WasmObjectFile::parseGlobalSection(const uint8_t *Ptr, const uint8_t *End)
   while (Count--) {
     wasm::WasmGlobal Global;
     Global.Index = NumImportedGlobals + Globals.size();
-    Global.Type.Type = readVarint7(Ptr);
+    Global.Type.Type = readUint8(Ptr);
     Global.Type.Mutable = readVaruint1(Ptr);
     if (Error Err = readInitExpr(Global.InitExpr, Ptr))
       return Err;
@@ -793,8 +818,16 @@ bool WasmObjectFile::isDefinedGlobalIndex(uint32_t Index) const {
   return Index >= NumImportedGlobals && isValidGlobalIndex(Index);
 }
 
-bool WasmObjectFile::isValidFunctionSymbolIndex(uint32_t Index) const {
+bool WasmObjectFile::isValidFunctionSymbol(uint32_t Index) const {
   return Index < Symbols.size() && Symbols[Index].isTypeFunction();
+}
+
+bool WasmObjectFile::isValidGlobalSymbol(uint32_t Index) const {
+  return Index < Symbols.size() && Symbols[Index].isTypeGlobal();
+}
+
+bool WasmObjectFile::isValidDataSymbol(uint32_t Index) const {
+  return Index < Symbols.size() && Symbols[Index].isTypeData();
 }
 
 wasm::WasmFunction &WasmObjectFile::getDefinedFunction(uint32_t Index) {
@@ -839,7 +872,7 @@ Error WasmObjectFile::parseCodeSection(const uint8_t *Ptr, const uint8_t *End) {
     while (NumLocalDecls--) {
       wasm::WasmLocalDecl Decl;
       Decl.Count = readVaruint32(Ptr);
-      Decl.Type = readVarint7(Ptr);
+      Decl.Type = readUint8(Ptr);
       Function.Locals.push_back(Decl);
     }
 

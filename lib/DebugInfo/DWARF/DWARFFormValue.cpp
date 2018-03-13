@@ -8,7 +8,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
-#include "SyntaxHighlighting.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/None.h"
 #include "llvm/ADT/Optional.h"
@@ -19,6 +18,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cinttypes>
 #include <cstdint>
@@ -26,7 +26,6 @@
 
 using namespace llvm;
 using namespace dwarf;
-using namespace syntax;
 
 static const DWARFFormValue::FormClass DWARF5FormClasses[] = {
     DWARFFormValue::FC_Unknown,  // 0x0
@@ -162,7 +161,7 @@ DWARFFormValue::getFixedByteSize(dwarf::Form Form,
     return 0;
 
   default:
-    llvm_unreachable("Handle this form in this switch statement");
+    break;
   }
   return None;
 }
@@ -421,8 +420,9 @@ bool DWARFFormValue::extractValue(const DWARFDataExtractor &Data,
 void DWARFFormValue::dump(raw_ostream &OS, DIDumpOptions DumpOpts) const {
   uint64_t UValue = Value.uval;
   bool CURelativeOffset = false;
-  raw_ostream &AddrOS =
-      DumpOpts.ShowAddresses ? WithColor(OS, syntax::Address).get() : nulls();
+  raw_ostream &AddrOS = DumpOpts.ShowAddresses
+                            ? WithColor(OS, HighlightColor::Address).get()
+                            : nulls();
   switch (Form) {
   case DW_FORM_addr:
     AddrOS << format("0x%016" PRIx64, UValue);
@@ -538,23 +538,28 @@ void DWARFFormValue::dump(raw_ostream &OS, DIDumpOptions DumpOpts) const {
     break;
   case DW_FORM_ref1:
     CURelativeOffset = true;
-    AddrOS << format("cu + 0x%2.2x", (uint8_t)UValue);
+    if (DumpOpts.Verbose)
+      AddrOS << format("cu + 0x%2.2x", (uint8_t)UValue);
     break;
   case DW_FORM_ref2:
     CURelativeOffset = true;
-    AddrOS << format("cu + 0x%4.4x", (uint16_t)UValue);
+    if (DumpOpts.Verbose)
+      AddrOS << format("cu + 0x%4.4x", (uint16_t)UValue);
     break;
   case DW_FORM_ref4:
     CURelativeOffset = true;
-    AddrOS << format("cu + 0x%4.4x", (uint32_t)UValue);
+    if (DumpOpts.Verbose)
+      AddrOS << format("cu + 0x%4.4x", (uint32_t)UValue);
     break;
   case DW_FORM_ref8:
     CURelativeOffset = true;
-    AddrOS << format("cu + 0x%8.8" PRIx64, UValue);
+    if (DumpOpts.Verbose)
+      AddrOS << format("cu + 0x%8.8" PRIx64, UValue);
     break;
   case DW_FORM_ref_udata:
     CURelativeOffset = true;
-    AddrOS << format("cu + 0x%" PRIx64, UValue);
+    if (DumpOpts.Verbose)
+      AddrOS << format("cu + 0x%" PRIx64, UValue);
     break;
   case DW_FORM_GNU_ref_alt:
     AddrOS << format("<alt 0x%" PRIx64 ">", UValue);
@@ -576,18 +581,20 @@ void DWARFFormValue::dump(raw_ostream &OS, DIDumpOptions DumpOpts) const {
     break;
   }
 
-  if (CURelativeOffset && DumpOpts.Verbose) {
-    OS << " => {";
-    WithColor(OS, syntax::Address).get()
+  if (CURelativeOffset) {
+    if (DumpOpts.Verbose)
+      OS << " => {";
+    WithColor(OS, HighlightColor::Address).get()
         << format("0x%8.8" PRIx64, UValue + (U ? U->getOffset() : 0));
-    OS << "}";
+    if (DumpOpts.Verbose)
+      OS << "}";
   }
 }
 
 void DWARFFormValue::dumpString(raw_ostream &OS) const {
   Optional<const char *> DbgStr = getAsCString();
   if (DbgStr.hasValue()) {
-    auto COS = WithColor(OS, syntax::String);
+    auto COS = WithColor(OS, HighlightColor::String);
     COS.get() << '"';
     COS.get().write_escaped(DbgStr.getValue());
     COS.get() << '"';

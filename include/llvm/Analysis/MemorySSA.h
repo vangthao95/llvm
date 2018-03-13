@@ -93,6 +93,7 @@
 #include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/ValueHandle.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include <algorithm>
@@ -217,8 +218,16 @@ protected:
       : DerivedUser(Type::getVoidTy(C), Vty, nullptr, NumOperands, DeleteValue),
         Block(BB) {}
 
+  // Use deleteValue() to delete a generic MemoryAccess.
+  ~MemoryAccess() = default;
+
 private:
   BasicBlock *Block;
+};
+
+template <>
+struct ilist_alloc_traits<MemoryAccess> {
+  static void deleteNode(MemoryAccess *MA) { MA->deleteValue(); }
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, const MemoryAccess &MA) {
@@ -240,7 +249,7 @@ public:
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(MemoryAccess);
 
   /// \brief Get the instruction that this MemoryUse represents.
-  Instruction *getMemoryInst() const { return MemoryInst; }
+  Instruction *getMemoryInst() const { return MemoryInstruction; }
 
   /// \brief Get the access that produces the memory state used by this Use.
   MemoryAccess *getDefiningAccess() const { return getOperand(0); }
@@ -255,6 +264,12 @@ public:
   inline MemoryAccess *getOptimized() const;
   inline void setOptimized(MemoryAccess *);
 
+  // Retrieve AliasResult type of the optimized access. Ideally this would be
+  // returned by the caching walker and may go away in the future.
+  Optional<AliasResult> getOptimizedAccessType() const {
+    return OptimizedAccessAlias;
+  }
+
   /// \brief Reset the ID of what this MemoryUse was optimized to, causing it to
   /// be rewalked by the walker if necessary.
   /// This really should only be called by tests.
@@ -266,20 +281,31 @@ protected:
 
   MemoryUseOrDef(LLVMContext &C, MemoryAccess *DMA, unsigned Vty,
                  DeleteValueTy DeleteValue, Instruction *MI, BasicBlock *BB)
-      : MemoryAccess(C, Vty, DeleteValue, BB, 1), MemoryInst(MI) {
+      : MemoryAccess(C, Vty, DeleteValue, BB, 1), MemoryInstruction(MI),
+        OptimizedAccessAlias(MayAlias) {
     setDefiningAccess(DMA);
   }
 
-  void setDefiningAccess(MemoryAccess *DMA, bool Optimized = false) {
+  // Use deleteValue() to delete a generic MemoryUseOrDef.
+  ~MemoryUseOrDef() = default;
+
+  void setOptimizedAccessType(Optional<AliasResult> AR) {
+    OptimizedAccessAlias = AR;
+  }
+
+  void setDefiningAccess(MemoryAccess *DMA, bool Optimized = false,
+                         Optional<AliasResult> AR = MayAlias) {
     if (!Optimized) {
       setOperand(0, DMA);
       return;
     }
     setOptimized(DMA);
+    setOptimizedAccessType(AR);
   }
 
 private:
-  Instruction *MemoryInst;
+  Instruction *MemoryInstruction;
+  Optional<AliasResult> OptimizedAccessAlias;
 };
 
 template <>
@@ -369,7 +395,9 @@ public:
     OptimizedID = getDefiningAccess()->getID();
   }
 
-  MemoryAccess *getOptimized() const { return Optimized; }
+  MemoryAccess *getOptimized() const {
+    return cast_or_null<MemoryAccess>(Optimized);
+  }
 
   bool isOptimized() const {
     return getOptimized() && getDefiningAccess() &&
@@ -389,7 +417,7 @@ private:
 
   const unsigned ID;
   unsigned OptimizedID = INVALID_MEMORYACCESS_ID;
-  MemoryAccess *Optimized = nullptr;
+  WeakVH Optimized;
 };
 
 template <>
@@ -773,7 +801,7 @@ private:
   // corresponding list is empty.
   AccessMap PerBlockAccesses;
   DefsMap PerBlockDefs;
-  std::unique_ptr<MemoryAccess> LiveOnEntryDef;
+  std::unique_ptr<MemoryAccess, ValueDeleter> LiveOnEntryDef;
 
   // Domination mappings
   // Note that the numbering is local to a block, even though the map is

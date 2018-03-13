@@ -135,6 +135,7 @@ public:
   ArrayRef<wasm::WasmLimits> memories() const { return Memories; }
   ArrayRef<wasm::WasmGlobal> globals() const { return Globals; }
   ArrayRef<wasm::WasmExport> exports() const { return Exports; }
+  ArrayRef<WasmSymbol> syms() const { return Symbols; }
   const wasm::WasmLinkingData& linkingData() const { return LinkingData; }
   uint32_t getNumberOfSymbols() const { return Symbols.size(); }
   ArrayRef<wasm::WasmElemSegment> elements() const { return ElemSegments; }
@@ -203,7 +204,9 @@ private:
   bool isDefinedFunctionIndex(uint32_t Index) const;
   bool isValidGlobalIndex(uint32_t Index) const;
   bool isDefinedGlobalIndex(uint32_t Index) const;
-  bool isValidFunctionSymbolIndex(uint32_t Index) const;
+  bool isValidFunctionSymbol(uint32_t Index) const;
+  bool isValidGlobalSymbol(uint32_t Index) const;
+  bool isValidDataSymbol(uint32_t Index) const;
   wasm::WasmFunction &getDefinedFunction(uint32_t Index);
   wasm::WasmGlobal &getDefinedGlobal(uint32_t Index);
 
