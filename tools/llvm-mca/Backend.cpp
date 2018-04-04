@@ -31,26 +31,19 @@ void Backend::addEventListener(HWEventListener *Listener) {
 void Backend::runCycle(unsigned Cycle) {
   notifyCycleBegin(Cycle);
 
-  if (!SM.hasNext()) {
-    notifyCycleEnd(Cycle);
-    return;
-  }
-
-  InstRef IR = SM.peekNext();
-  const InstrDesc *Desc = &IB->getOrCreateInstrDesc(STI, *IR.second);
-  while (DU->isAvailable(Desc->NumMicroOps) && DU->canDispatch(*Desc)) {
-    Instruction *NewIS = IB->createInstruction(STI, *DU, IR.first, *IR.second);
-    Instructions[IR.first] = std::unique_ptr<Instruction>(NewIS);
-    NewIS->setRCUTokenID(DU->dispatch(IR.first, NewIS));
-
-    // Check if we have dispatched all the instructions.
-    SM.updateNext();
-    if (!SM.hasNext())
+  while (SM.hasNext()) {
+    InstRef IR = SM.peekNext();
+    std::unique_ptr<Instruction> NewIS =
+        IB.createInstruction(IR.first, *IR.second);
+    const InstrDesc &Desc = NewIS->getDesc();
+    if (!DU->isAvailable(Desc.NumMicroOps) ||
+        !DU->canDispatch(IR.first, *NewIS))
       break;
 
-    // Prepare for the next round.
-    IR = SM.peekNext();
-    Desc = &IB->getOrCreateInstrDesc(STI, *IR.second);
+    Instruction *IS = NewIS.get();
+    Instructions[IR.first] = std::move(NewIS);
+    DU->dispatch(IR.first, IS, STI);
+    SM.updateNext();
   }
 
   notifyCycleEnd(Cycle);
@@ -70,6 +63,11 @@ void Backend::notifyInstructionEvent(const HWInstructionEvent &Event) {
     Listener->onInstructionEvent(Event);
 }
 
+void Backend::notifyStallEvent(const HWStallEvent &Event) {
+  for (HWEventListener *Listener : Listeners)
+    Listener->onStallEvent(Event);
+}
+
 void Backend::notifyResourceAvailable(const ResourceRef &RR) {
   DEBUG(dbgs() << "[E] Resource Available: [" << RR.first << '.' << RR.second
                << "]\n");
@@ -77,10 +75,19 @@ void Backend::notifyResourceAvailable(const ResourceRef &RR) {
     Listener->onResourceAvailable(RR);
 }
 
+void Backend::notifyReservedBuffers(ArrayRef<unsigned> Buffers) {
+  for (HWEventListener *Listener : Listeners)
+    Listener->onReservedBuffers(Buffers);
+}
+
+void Backend::notifyReleasedBuffers(ArrayRef<unsigned> Buffers) {
+  for (HWEventListener *Listener : Listeners)
+    Listener->onReleasedBuffers(Buffers);
+}
+
 void Backend::notifyCycleEnd(unsigned Cycle) {
   DEBUG(dbgs() << "[E] Cycle end: " << Cycle << "\n\n");
   for (HWEventListener *Listener : Listeners)
     Listener->onCycleEnd(Cycle);
 }
-
 } // namespace mca.

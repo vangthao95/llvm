@@ -2457,7 +2457,28 @@ int BoUpSLP::getTreeCost() {
 
   unsigned BundleWidth = VectorizableTree[0].Scalars.size();
 
-  for (TreeEntry &TE : VectorizableTree) {
+  for (unsigned I = 0, E = VectorizableTree.size(); I < E; ++I) {
+    TreeEntry &TE = VectorizableTree[I];
+
+    // We create duplicate tree entries for gather sequences that have multiple
+    // uses. However, we should not compute the cost of duplicate sequences.
+    // For example, if we have a build vector (i.e., insertelement sequence)
+    // that is used by more than one vector instruction, we only need to
+    // compute the cost of the insertelement instructions once. The redundent
+    // instructions will be eliminated by CSE.
+    //
+    // We should consider not creating duplicate tree entries for gather
+    // sequences, and instead add additional edges to the tree representing
+    // their uses. Since such an approach results in fewer total entries,
+    // existing heuristics based on tree size may yeild different results.
+    //
+    if (TE.NeedToGather &&
+        std::any_of(std::next(VectorizableTree.begin(), I + 1),
+                    VectorizableTree.end(), [TE](TreeEntry &Entry) {
+                      return Entry.NeedToGather && Entry.isSame(TE.Scalars);
+                    }))
+      continue;
+
     int C = getEntryCost(&TE);
     DEBUG(dbgs() << "SLP: Adding cost " << C << " for bundle that starts with "
                  << *TE.Scalars[0] << ".\n");
@@ -4280,24 +4301,9 @@ void BoUpSLP::computeMinimumValueSizes() {
   // additional roots that require investigating in Roots.
   SmallVector<Value *, 32> ToDemote;
   SmallVector<Value *, 4> Roots;
-  for (auto *Root : TreeRoot) {
-    // Do not include top zext/sext/trunc operations to those to be demoted, it
-    // produces noise cast<vect>, trunc <vect>, exctract <vect>, cast <extract>
-    // sequence.
-    if (isa<Constant>(Root))
-      continue;
-    auto *I = dyn_cast<Instruction>(Root);
-    if (!I || !I->hasOneUse() || !Expr.count(I))
-      return;
-    if (isa<ZExtInst>(I) || isa<SExtInst>(I))
-      continue;
-    if (auto *TI = dyn_cast<TruncInst>(I)) {
-      Roots.push_back(TI->getOperand(0));
-      continue;
-    }
+  for (auto *Root : TreeRoot)
     if (!collectValuesToDemote(Root, Expr, ToDemote, Roots))
       return;
-  }
 
   // The maximum bit width required to represent all the values that can be
   // demoted without loss of precision. It would be safe to truncate the roots
@@ -4326,7 +4332,11 @@ void BoUpSLP::computeMinimumValueSizes() {
   // We start by looking at each entry that can be demoted. We compute the
   // maximum bit width required to store the scalar by using ValueTracking to
   // compute the number of high-order bits we can truncate.
-  if (MaxBitWidth == DL->getTypeSizeInBits(TreeRoot[0]->getType())) {
+  if (MaxBitWidth == DL->getTypeSizeInBits(TreeRoot[0]->getType()) &&
+      llvm::all_of(TreeRoot, [](Value *R) {
+        assert(R->hasOneUse() && "Root should have only one use!");
+        return isa<GetElementPtrInst>(R->user_back());
+      })) {
     MaxBitWidth = 8u;
 
     // Determine if the sign bit of all the roots is known to be zero. If not,

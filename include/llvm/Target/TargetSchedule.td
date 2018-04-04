@@ -99,6 +99,12 @@ class SchedMachineModel {
   // resulting from changes to the instruction definitions.
   bit CompleteModel = 1;
 
+  // Indicates that we should do full overlap checking for multiple InstrRWs
+  // definining the same instructions within the same SchedMachineModel.
+  // FIXME: Remove when all in tree targets are clean with the full check
+  // enabled.
+  bit FullInstRWOverlapCheck = 1;
+
   // A processor may only implement part of published ISA, due to either new ISA
   // extensions, (e.g. Pentium 4 doesn't have AVX) or implementation
   // (ARM/MIPS/PowerPC/SPARC soft float cores).
@@ -434,5 +440,22 @@ class ItinRW<list<SchedReadWrite> rw, list<InstrItinClass> iic> {
 class SchedAlias<SchedReadWrite match, SchedReadWrite alias> {
   SchedReadWrite MatchRW = match;
   SchedReadWrite AliasRW = alias;
+  SchedMachineModel SchedModel = ?;
+}
+
+// Alow the definition of processor register files.
+// Each processor register file declares the number of physical registers, as
+// well as a optional register cost information. The cost of a register R is the
+// number of physical registers used to rename R (at register renaming stage).
+// That value defaults to 1, to all the registers contained in the register
+// file. The set of target register files is inferred from the list of register
+// classes. Register costs are defined at register class granularity. An empty
+// list of register classes means that this register file contains all the
+// registers defined by the target.
+class RegisterFile<int numPhysRegs, list<RegisterClass> Classes = [],
+                   list<int> Costs = []> {
+  list<RegisterClass> RegClasses = Classes;
+  list<int> RegCosts = Costs;
+  int NumPhysRegs = numPhysRegs;
   SchedMachineModel SchedModel = ?;
 }

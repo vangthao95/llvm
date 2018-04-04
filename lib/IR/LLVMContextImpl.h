@@ -1472,7 +1472,7 @@ public:
 
   /// \brief Access the object which manages optimization bisection for failure
   /// analysis.
-  OptBisect &getOptBisect();
+  OptPassGate &getOptPassGate();
 };
 
 } // end namespace llvm

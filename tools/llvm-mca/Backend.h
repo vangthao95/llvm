@@ -24,6 +24,7 @@ namespace mca {
 
 class HWEventListener;
 class HWInstructionEvent;
+class HWStallEvent;
 
 /// \brief An out of order backend for a specific subtarget.
 ///
@@ -46,7 +47,7 @@ class HWInstructionEvent;
 class Backend {
   const llvm::MCSubtargetInfo &STI;
 
-  std::unique_ptr<InstrBuilder> IB;
+  InstrBuilder &IB;
   std::unique_ptr<Scheduler> HWS;
   std::unique_ptr<DispatchUnit> DU;
   SourceMgr &SM;
@@ -58,20 +59,19 @@ class Backend {
   void runCycle(unsigned Cycle);
 
 public:
-  Backend(const llvm::MCSubtargetInfo &Subtarget, const llvm::MCInstrInfo &MCII,
-          const llvm::MCRegisterInfo &MRI, SourceMgr &Source,
+  Backend(const llvm::MCSubtargetInfo &Subtarget,
+          const llvm::MCRegisterInfo &MRI, InstrBuilder &B, SourceMgr &Source,
           unsigned DispatchWidth = 0, unsigned RegisterFileSize = 0,
           unsigned MaxRetirePerCycle = 0, unsigned LoadQueueSize = 0,
           unsigned StoreQueueSize = 0, bool AssumeNoAlias = false)
-      : STI(Subtarget),
+      : STI(Subtarget), IB(B),
         HWS(llvm::make_unique<Scheduler>(this, Subtarget.getSchedModel(),
                                          LoadQueueSize, StoreQueueSize,
                                          AssumeNoAlias)),
         DU(llvm::make_unique<DispatchUnit>(
-            this, MRI, Subtarget.getSchedModel().MicroOpBufferSize,
+            this, STI, MRI, Subtarget.getSchedModel().MicroOpBufferSize,
             RegisterFileSize, MaxRetirePerCycle, DispatchWidth, HWS.get())),
         SM(Source), Cycles(0) {
-    IB = llvm::make_unique<InstrBuilder>(MCII, HWS->getProcResourceMasks());
     HWS->setDispatchUnit(DU.get());
   }
 
@@ -80,8 +80,6 @@ public:
       runCycle(Cycles++);
   }
 
-  unsigned getNumIterations() const { return SM.getNumIterations(); }
-  unsigned getNumInstructions() const { return SM.size(); }
   const Instruction &getInstruction(unsigned Index) const {
     const auto It = Instructions.find(Index);
     assert(It != Instructions.end() && "no running instructions with index");
@@ -89,50 +87,16 @@ public:
     return *It->second;
   }
   void eraseInstruction(unsigned Index) { Instructions.erase(Index); }
-  unsigned getNumCycles() const { return Cycles; }
-  unsigned getTotalRegisterMappingsCreated() const {
-    return DU->getTotalRegisterMappingsCreated();
-  }
-  unsigned getMaxUsedRegisterMappings() const {
-    return DU->getMaxUsedRegisterMappings();
-  }
-  unsigned getDispatchWidth() const { return DU->getDispatchWidth(); }
-
-  const llvm::MCSubtargetInfo &getSTI() const { return STI; }
-  const llvm::MCSchedModel &getSchedModel() const {
-    return STI.getSchedModel();
-  }
-
-  void getBuffersUsage(std::vector<BufferUsageEntry> &Usage) const {
-    return HWS->getBuffersUsage(Usage);
-  }
-
-  unsigned getNumRATStalls() const { return DU->getNumRATStalls(); }
-  unsigned getNumRCUStalls() const { return DU->getNumRCUStalls(); }
-  unsigned getNumSQStalls() const { return DU->getNumSQStalls(); }
-  unsigned getNumLDQStalls() const { return DU->getNumLDQStalls(); }
-  unsigned getNumSTQStalls() const { return DU->getNumSTQStalls(); }
-  unsigned getNumDispatchGroupStalls() const {
-    return DU->getNumDispatchGroupStalls();
-  }
-
-  const llvm::MCInst &getMCInstFromIndex(unsigned Index) const {
-    return SM.getMCInstFromIndex(Index);
-  }
-
-  const InstrDesc &getInstrDesc(const llvm::MCInst &Inst) const {
-    return IB->getOrCreateInstrDesc(STI, Inst);
-  }
-
-  const SourceMgr &getSourceMgr() const { return SM; }
 
   void addEventListener(HWEventListener *Listener);
   void notifyCycleBegin(unsigned Cycle);
   void notifyInstructionEvent(const HWInstructionEvent &Event);
+  void notifyStallEvent(const HWStallEvent &Event);
   void notifyResourceAvailable(const ResourceRef &RR);
+  void notifyReservedBuffers(llvm::ArrayRef<unsigned> Buffers);
+  void notifyReleasedBuffers(llvm::ArrayRef<unsigned> Buffers);
   void notifyCycleEnd(unsigned Cycle);
 };
-
 } // namespace mca
 
 #endif

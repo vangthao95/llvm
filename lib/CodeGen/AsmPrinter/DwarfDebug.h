@@ -260,6 +260,16 @@ class DwarfDebug : public DebugHandlerBase {
   /// Use inlined strings.
   bool UseInlineStrings = false;
 
+  /// Whether to emit DWARF pub sections or not.
+  bool UsePubSections = true;
+
+  /// Allow emission of .debug_ranges section.
+  bool UseRangesSection = true;
+
+  /// True if the sections itself must be used as references and don't create
+  /// temp symbols inside DWARF sections.
+  bool UseSectionsAsReferences = false;
+
   /// DWARF5 Experimental Options
   /// @{
   bool HasDwarfAccelTables;
@@ -271,10 +281,6 @@ class DwarfDebug : public DebugHandlerBase {
   /// The pre-DWARF v5 string offsets table for split dwarf is, in contrast,
   /// a monolithic sequence of string offsets.
   bool UseSegmentedStringOffsetsTable;
-
-  /// Whether we have emitted any type units with split DWARF (and therefore
-  /// need to emit a line table to the .dwo file).
-  bool HasSplitTypeUnits = false;
 
   /// Separated Dwarf Variables
   /// In general these will all be for bits that are left in the
@@ -396,6 +402,12 @@ class DwarfDebug : public DebugHandlerBase {
   void emitMacroFile(DIMacroFile &F, DwarfCompileUnit &U);
   void handleMacroNodes(DIMacroNodeArray Nodes, DwarfCompileUnit &U);
 
+  /// Populate dependent type variable map
+  void populateDependentTypeMap();
+
+  /// Clear dependent type tracking map
+  void clearDependentTracking() { VariableInDependentType.clear(); }
+
   /// DWARF 5 Experimental Split Dwarf Emitters
 
   /// Initialize common features of skeleton units.
@@ -452,11 +464,8 @@ class DwarfDebug : public DebugHandlerBase {
   void collectVariableInfoFromMFTable(DwarfCompileUnit &TheCU,
                                       DenseSet<InlinedVariable> &P);
 
-  /// Populate dependent type variable map
-  void populateDependentTypeMap();
-
-  /// Clear dependent type tracking map
-  void clearDependentTracking() { VariableInDependentType.clear(); }
+  /// Emit the reference to the section.
+  void emitSectionReference(const DwarfCompileUnit &CU);
 
 protected:
   /// Gather pre-function debug information.
@@ -516,6 +525,17 @@ public:
 
   /// Returns whether to use inline strings.
   bool useInlineStrings() const { return UseInlineStrings; }
+
+  /// Returns whether GNU oub sections should be emitted.
+  bool usePubSections() const { return UsePubSections; }
+
+  /// Returns whether ranges section should be emitted.
+  bool useRangesSection() const { return UseRangesSection; }
+
+  /// Returns whether to use sections as labels rather than temp symbols.
+  bool useSectionsAsReferences() const {
+    return UseSectionsAsReferences;
+  }
 
   // Experimental DWARF5 features.
 

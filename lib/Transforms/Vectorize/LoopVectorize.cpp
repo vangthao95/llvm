@@ -542,9 +542,9 @@ protected:
   /// Compute scalar induction steps. \p ScalarIV is the scalar induction
   /// variable on which to base the steps, \p Step is the size of the step, and
   /// \p EntryVal is the value from the original loop that maps to the steps.
-  /// Note that \p EntryVal doesn't have to be an induction variable (e.g., it
-  /// can be a truncate instruction).
-  void buildScalarSteps(Value *ScalarIV, Value *Step, Value *EntryVal,
+  /// Note that \p EntryVal doesn't have to be an induction variable - it
+  /// can also be a truncate instruction.
+  void buildScalarSteps(Value *ScalarIV, Value *Step, Instruction *EntryVal,
                         const InductionDescriptor &ID);
 
   /// Create a vector induction phi node based on an existing scalar one. \p
@@ -571,10 +571,20 @@ protected:
   /// vector loop for both the Phi and the cast. 
   /// If \p VectorLoopValue is a scalarized value, \p Lane is also specified,
   /// Otherwise, \p VectorLoopValue is a widened/vectorized value.
-  void recordVectorLoopValueForInductionCast (const InductionDescriptor &ID,
-                                              Value *VectorLoopValue, 
-                                              unsigned Part, 
-                                              unsigned Lane = UINT_MAX);
+  ///
+  /// \p EntryVal is the value from the original loop that maps to the vector
+  /// phi node and is used to distinguish what is the IV currently being
+  /// processed - original one (if \p EntryVal is a phi corresponding to the
+  /// original IV) or the "newly-created" one based on the proof mentioned above
+  /// (see also buildScalarSteps() and createVectorIntOrFPInductionPHI()). In the
+  /// latter case \p EntryVal is a TruncInst and we must not record anything for
+  /// that IV, but it's error-prone to expect callers of this routine to care
+  /// about that, hence this explicit parameter.
+  void recordVectorLoopValueForInductionCast(const InductionDescriptor &ID,
+                                             const Instruction *EntryVal,
+                                             Value *VectorLoopValue,
+                                             unsigned Part,
+                                             unsigned Lane = UINT_MAX);
 
   /// Generate a shuffle sequence that will reverse the vector Vec.
   virtual Value *reverseVector(Value *Vec);
@@ -1832,9 +1842,6 @@ public:
 
     /// Holds the maximum number of concurrent live intervals in the loop.
     unsigned MaxLocalUsers;
-
-    /// Holds the number of instructions in the loop.
-    unsigned NumInstructions;
   };
 
   /// \return Returns information about the register usages of the loop for the
@@ -2371,6 +2378,8 @@ Value *InnerLoopVectorizer::getBroadcastInstrs(Value *V) {
 
 void InnerLoopVectorizer::createVectorIntOrFpInductionPHI(
     const InductionDescriptor &II, Value *Step, Instruction *EntryVal) {
+  assert((isa<PHINode>(EntryVal) || isa<TruncInst>(EntryVal)) &&
+         "Expected either an induction phi-node or a truncate of it!");
   Value *Start = II.getStartValue();
 
   // Construct the initial value of the vector IV in the vector loop preheader
@@ -2424,8 +2433,7 @@ void InnerLoopVectorizer::createVectorIntOrFpInductionPHI(
 
     if (isa<TruncInst>(EntryVal))
       addMetadata(LastInduction, EntryVal);
-    else
-      recordVectorLoopValueForInductionCast(II, LastInduction, Part);
+    recordVectorLoopValueForInductionCast(II, EntryVal, LastInduction, Part);
 
     LastInduction = cast<Instruction>(addFastMathFlag(
         Builder.CreateBinOp(AddOp, LastInduction, SplatVF, "step.add")));
@@ -2459,8 +2467,20 @@ bool InnerLoopVectorizer::needsScalarInduction(Instruction *IV) const {
 }
 
 void InnerLoopVectorizer::recordVectorLoopValueForInductionCast(
-    const InductionDescriptor &ID, Value *VectorLoopVal, unsigned Part,
-    unsigned Lane) {
+    const InductionDescriptor &ID, const Instruction *EntryVal,
+    Value *VectorLoopVal, unsigned Part, unsigned Lane) {
+  assert((isa<PHINode>(EntryVal) || isa<TruncInst>(EntryVal)) &&
+         "Expected either an induction phi-node or a truncate of it!");
+
+  // This induction variable is not the phi from the original loop but the
+  // newly-created IV based on the proof that casted Phi is equal to the
+  // uncasted Phi in the vectorized loop (under a runtime guard possibly). It
+  // re-uses the same InductionDescriptor that original IV uses but we don't
+  // have to do any recording in this case - that is done when original IV is
+  // processed.
+  if (isa<TruncInst>(EntryVal))
+    return;
+
   const SmallVectorImpl<Instruction *> &Casts = ID.getCastInsts();
   if (Casts.empty())
     return;
@@ -2557,8 +2577,7 @@ void InnerLoopVectorizer::widenIntOrFpInduction(PHINode *IV, TruncInst *Trunc) {
       VectorLoopValueMap.setVectorValue(EntryVal, Part, EntryPart);
       if (Trunc)
         addMetadata(EntryPart, Trunc);
-      else
-        recordVectorLoopValueForInductionCast(ID, EntryPart, Part);
+      recordVectorLoopValueForInductionCast(ID, EntryVal, EntryPart, Part);
     }
   }
 
@@ -2629,7 +2648,7 @@ Value *InnerLoopVectorizer::getStepVector(Value *Val, int StartIdx, Value *Step,
 }
 
 void InnerLoopVectorizer::buildScalarSteps(Value *ScalarIV, Value *Step,
-                                           Value *EntryVal,
+                                           Instruction *EntryVal,
                                            const InductionDescriptor &ID) {
   // We shouldn't have to build scalar steps if we aren't vectorizing.
   assert(VF > 1 && "VF should be greater than one");
@@ -2664,7 +2683,7 @@ void InnerLoopVectorizer::buildScalarSteps(Value *ScalarIV, Value *Step,
       auto *Mul = addFastMathFlag(Builder.CreateBinOp(MulOp, StartIdx, Step));
       auto *Add = addFastMathFlag(Builder.CreateBinOp(AddOp, ScalarIV, Mul));
       VectorLoopValueMap.setScalarValue(EntryVal, {Part, Lane}, Add);
-      recordVectorLoopValueForInductionCast(ID, Add, Part, Lane);
+      recordVectorLoopValueForInductionCast(ID, EntryVal, Add, Part, Lane);
     }
   }
 }
@@ -4823,7 +4842,7 @@ bool LoopVectorizationLegality::canVectorize() {
   // Store the result and return it at the end instead of exiting early, in case
   // allowExtraAnalysis is used to report multiple reasons for not vectorizing.
   bool Result = true;
-  
+
   bool DoExtraAnalysis = ORE->allowExtraAnalysis(DEBUG_TYPE);
   // We must have a loop in canonical form. Loops with indirectbr in them cannot
   // be canonicalized.
@@ -6120,7 +6139,8 @@ LoopVectorizationCostModel::computeFeasibleMaxVF(bool OptForSize,
   }
 
   unsigned MaxVF = MaxVectorSize;
-  if (MaximizeBandwidth && !OptForSize) {
+  if (TTI.shouldMaximizeVectorBandwidth(OptForSize) ||
+      (MaximizeBandwidth && !OptForSize)) {
     // Collect all viable vectorization factors larger than the default MaxVF
     // (i.e. MaxVectorSize).
     SmallVector<unsigned, 8> VFs;
@@ -6296,7 +6316,6 @@ unsigned LoopVectorizationCostModel::selectInterleaveCount(bool OptForSize,
   // We divide by these constants so assume that we have at least one
   // instruction that uses at least one register.
   R.MaxLocalUsers = std::max(R.MaxLocalUsers, 1U);
-  R.NumInstructions = std::max(R.NumInstructions, 1U);
 
   // We calculate the interleave count using the following formula.
   // Subtract the number of loop invariants from the number of available
@@ -6423,7 +6442,6 @@ LoopVectorizationCostModel::calculateRegisterUsage(ArrayRef<unsigned> VFs) {
   DFS.perform(LI);
 
   RegisterUsage RU;
-  RU.NumInstructions = 0;
 
   // Each 'key' in the map opens a new interval. The values
   // of the map are the index of the 'last seen' usage of the
@@ -6442,7 +6460,6 @@ LoopVectorizationCostModel::calculateRegisterUsage(ArrayRef<unsigned> VFs) {
 
   unsigned Index = 0;
   for (BasicBlock *BB : make_range(DFS.beginRPO(), DFS.endRPO())) {
-    RU.NumInstructions += BB->size();
     for (Instruction &I : *BB) {
       IdxToInstr[Index++] = &I;
 
@@ -6552,7 +6569,6 @@ LoopVectorizationCostModel::calculateRegisterUsage(ArrayRef<unsigned> VFs) {
     DEBUG(dbgs() << "LV(REG): VF = " << VFs[i] << '\n');
     DEBUG(dbgs() << "LV(REG): Found max usage: " << MaxUsages[i] << '\n');
     DEBUG(dbgs() << "LV(REG): Found invariant usage: " << Invariant << '\n');
-    DEBUG(dbgs() << "LV(REG): LoopSize: " << RU.NumInstructions << '\n');
 
     RU.LoopInvariantRegs = Invariant;
     RU.MaxLocalUsers = MaxUsages[i];

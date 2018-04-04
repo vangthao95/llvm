@@ -3005,17 +3005,22 @@ Instruction *InstCombiner::foldICmpBinOp(ICmpInst &I) {
   // icmp (X-Y), X -> icmp 0, Y for equalities or if there is no overflow.
   if (A == Op1 && NoOp0WrapProblem)
     return new ICmpInst(Pred, Constant::getNullValue(Op1->getType()), B);
-
   // icmp X, (X-Y) -> icmp Y, 0 for equalities or if there is no overflow.
   if (C == Op0 && NoOp1WrapProblem)
     return new ICmpInst(Pred, D, Constant::getNullValue(Op0->getType()));
+
+  // (A - B) >u A --> A <u B
+  if (A == Op1 && Pred == ICmpInst::ICMP_UGT)
+    return new ICmpInst(ICmpInst::ICMP_ULT, A, B);
+  // C <u (C - D) --> C <u D
+  if (C == Op0 && Pred == ICmpInst::ICMP_ULT)
+    return new ICmpInst(ICmpInst::ICMP_ULT, C, D);
 
   // icmp (Y-X), (Z-X) -> icmp Y, Z for equalities or if there is no overflow.
   if (B && D && B == D && NoOp0WrapProblem && NoOp1WrapProblem &&
       // Try not to increase register pressure.
       BO0->hasOneUse() && BO1->hasOneUse())
     return new ICmpInst(Pred, A, C);
-
   // icmp (X-Y), (X-Z) -> icmp Z, Y for equalities or if there is no overflow.
   if (A && C && A == C && NoOp0WrapProblem && NoOp1WrapProblem &&
       // Try not to increase register pressure.
@@ -4506,6 +4511,34 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
         return New;
   }
 
+  // Zero-equality and sign-bit checks are preserved through sitofp + bitcast.
+  Value *X;
+  if (match(Op0, m_BitCast(m_SIToFP(m_Value(X))))) {
+    // icmp  eq (bitcast (sitofp X)), 0 --> icmp  eq X, 0
+    // icmp  ne (bitcast (sitofp X)), 0 --> icmp  ne X, 0
+    // icmp slt (bitcast (sitofp X)), 0 --> icmp slt X, 0
+    // icmp sgt (bitcast (sitofp X)), 0 --> icmp sgt X, 0
+    if ((Pred == ICmpInst::ICMP_EQ || Pred == ICmpInst::ICMP_SLT ||
+         Pred == ICmpInst::ICMP_NE || Pred == ICmpInst::ICMP_SGT) &&
+        match(Op1, m_Zero()))
+      return new ICmpInst(Pred, X, ConstantInt::getNullValue(X->getType()));
+
+    // icmp slt (bitcast (sitofp X)), 1 --> icmp slt X, 1
+    if (Pred == ICmpInst::ICMP_SLT && match(Op1, m_One()))
+      return new ICmpInst(Pred, X, ConstantInt::get(X->getType(), 1));
+
+    // icmp sgt (bitcast (sitofp X)), -1 --> icmp sgt X, -1
+    if (Pred == ICmpInst::ICMP_SGT && match(Op1, m_AllOnes()))
+      return new ICmpInst(Pred, X, ConstantInt::getAllOnesValue(X->getType()));
+  }
+
+  // Zero-equality checks are preserved through unsigned floating-point casts:
+  // icmp eq (bitcast (uitofp X)), 0 --> icmp eq X, 0
+  // icmp ne (bitcast (uitofp X)), 0 --> icmp ne X, 0
+  if (match(Op0, m_BitCast(m_UIToFP(m_Value(X)))))
+    if (I.isEquality() && match(Op1, m_Zero()))
+      return new ICmpInst(Pred, X, ConstantInt::getNullValue(X->getType()));
+
   // Test to see if the operands of the icmp are casted versions of other
   // values.  If the ptr->ptr cast can be stripped off both arguments, we do so
   // now.
@@ -4914,11 +4947,11 @@ Instruction *InstCombiner::visitFCmpInst(FCmpInst &I) {
   // If we're just checking for a NaN (ORD/UNO) and have a non-NaN operand,
   // then canonicalize the operand to 0.0.
   if (Pred == CmpInst::FCMP_ORD || Pred == CmpInst::FCMP_UNO) {
-    if (!match(Op0, m_Zero()) && isKnownNeverNaN(Op0)) {
+    if (!match(Op0, m_PosZeroFP()) && isKnownNeverNaN(Op0)) {
       I.setOperand(0, ConstantFP::getNullValue(Op0->getType()));
       return &I;
     }
-    if (!match(Op1, m_Zero()) && isKnownNeverNaN(Op1)) {
+    if (!match(Op1, m_PosZeroFP()) && isKnownNeverNaN(Op1)) {
       I.setOperand(1, ConstantFP::getNullValue(Op0->getType()));
       return &I;
     }

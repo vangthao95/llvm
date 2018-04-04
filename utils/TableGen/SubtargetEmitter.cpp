@@ -90,6 +90,7 @@ class SubtargetEmitter {
   void EmitItineraries(raw_ostream &OS,
                        std::vector<std::vector<InstrItinerary>>
                          &ProcItinLists);
+  void EmitExtraProcessorInfo(const CodeGenProcModel &ProcModel, raw_ostream &OS);
   void EmitProcessorProp(raw_ostream &OS, const Record *R, StringRef Name,
                          char Separator);
   void EmitProcessorResourceSubUnits(const CodeGenProcModel &ProcModel,
@@ -194,8 +195,7 @@ unsigned SubtargetEmitter::FeatureKeyValues(raw_ostream &OS) {
        << "\"" << Desc << "\", "
        << "{ " << Target << "::" << Name << " }, ";
 
-    const std::vector<Record*> &ImpliesList =
-      Feature->getValueAsListOfDefs("Implies");
+    RecVec ImpliesList = Feature->getValueAsListOfDefs("Implies");
 
     OS << "{";
     for (unsigned j = 0, M = ImpliesList.size(); j < M;) {
@@ -230,8 +230,7 @@ unsigned SubtargetEmitter::CPUKeyValues(raw_ostream &OS) {
   // For each processor
   for (Record *Processor : ProcessorList) {
     StringRef Name = Processor->getValueAsString("Name");
-    const std::vector<Record*> &FeatureList =
-      Processor->getValueAsListOfDefs("Features");
+    RecVec FeatureList = Processor->getValueAsListOfDefs("Features");
 
     // Emit as { "cpu", "description", { f1 , f2 , ... fn } },
     OS << "  { "
@@ -263,8 +262,7 @@ void SubtargetEmitter::FormItineraryStageString(const std::string &Name,
                                                 std::string &ItinString,
                                                 unsigned &NStages) {
   // Get states list
-  const std::vector<Record*> &StageList =
-    ItinData->getValueAsListOfDefs("Stages");
+  RecVec StageList = ItinData->getValueAsListOfDefs("Stages");
 
   // For each stage
   unsigned N = NStages = StageList.size();
@@ -277,7 +275,7 @@ void SubtargetEmitter::FormItineraryStageString(const std::string &Name,
     ItinString += "  { " + itostr(Cycles) + ", ";
 
     // Get unit list
-    const std::vector<Record*> &UnitList = Stage->getValueAsListOfDefs("Units");
+    RecVec UnitList = Stage->getValueAsListOfDefs("Units");
 
     // For each unit
     for (unsigned j = 0, M = UnitList.size(); j < M;) {
@@ -306,7 +304,7 @@ void SubtargetEmitter::FormItineraryStageString(const std::string &Name,
 void SubtargetEmitter::FormItineraryOperandCycleString(Record *ItinData,
                          std::string &ItinString, unsigned &NOperandCycles) {
   // Get operand cycle list
-  const std::vector<int64_t> &OperandCycleList =
+  std::vector<int64_t> OperandCycleList =
     ItinData->getValueAsListOfInts("OperandCycles");
 
   // For each operand cycle
@@ -324,8 +322,7 @@ void SubtargetEmitter::FormItineraryBypassString(const std::string &Name,
                                                  Record *ItinData,
                                                  std::string &ItinString,
                                                  unsigned NOperandCycles) {
-  const std::vector<Record*> &BypassList =
-    ItinData->getValueAsListOfDefs("Bypasses");
+  RecVec BypassList = ItinData->getValueAsListOfDefs("Bypasses");
   unsigned N = BypassList.size();
   unsigned i = 0;
   for (; i < N;) {
@@ -356,7 +353,7 @@ EmitStageAndOperandCycleData(raw_ostream &OS,
     if (!ItinsDefSet.insert(ProcModel.ItinsDef).second)
       continue;
 
-    std::vector<Record*> FUs = ProcModel.ItinsDef->getValueAsListOfDefs("FU");
+    RecVec FUs = ProcModel.ItinsDef->getValueAsListOfDefs("FU");
     if (FUs.empty())
       continue;
 
@@ -370,9 +367,9 @@ EmitStageAndOperandCycleData(raw_ostream &OS,
 
     OS << "} // end namespace " << Name << "FU\n";
 
-    std::vector<Record*> BPs = ProcModel.ItinsDef->getValueAsListOfDefs("BP");
+    RecVec BPs = ProcModel.ItinsDef->getValueAsListOfDefs("BP");
     if (!BPs.empty()) {
-      OS << "\n// Pipeline forwarding pathes for itineraries \"" << Name
+      OS << "\n// Pipeline forwarding paths for itineraries \"" << Name
          << "\"\n" << "namespace " << Name << "Bypass {\n";
 
       OS << "  const unsigned NoBypass = 0;\n";
@@ -606,6 +603,61 @@ void SubtargetEmitter::EmitProcessorResourceSubUnits(
     OS << "  // " << PRDef->getName() << "\n";
   }
   OS << "};\n";
+}
+
+void SubtargetEmitter::EmitExtraProcessorInfo(const CodeGenProcModel &ProcModel,
+                                              raw_ostream &OS) {
+  if (llvm::all_of(ProcModel.RegisterFiles, [](const CodeGenRegisterFile &RF) {
+        return RF.hasDefaultCosts();
+      }))
+    return;
+
+  // Print the RegisterCost table first.
+  OS << "\n// {RegisterClassID, Register Cost}\n";
+  OS << "static const llvm::MCRegisterCostEntry " << ProcModel.ModelName
+     << "RegisterCosts"
+     << "[] = {\n";
+
+  for (const CodeGenRegisterFile &RF : ProcModel.RegisterFiles) {
+    // Skip register files with a default cost table.
+    if (RF.hasDefaultCosts())
+      continue;
+    // Add entries to the cost table.
+    for (const CodeGenRegisterCost &RC : RF.Costs) {
+      OS << "  { ";
+      Record *Rec = RC.RCDef;
+      if (Rec->getValue("Namespace"))
+        OS << Rec->getValueAsString("Namespace") << "::";
+      OS << Rec->getName() << "RegClassID, " << RC.Cost << "},\n";
+    }
+  }
+  OS << "};\n";
+
+  // Now generate a table with register file info.
+  OS << "\n // {Name, #PhysRegs, #CostEntries, IndexToCostTbl}\n";
+  OS << "static const llvm::MCRegisterFileDesc " << ProcModel.ModelName
+     << "RegisterFiles"
+     << "[] = {\n"
+     << "  { \"InvalidRegisterFile\", 0, 0, 0 },\n";
+  unsigned CostTblIndex = 0;
+
+  for (const CodeGenRegisterFile &RD : ProcModel.RegisterFiles) {
+    OS << "  { ";
+    OS << '"' << RD.Name << '"' << ", " << RD.NumPhysRegs << ", ";
+    unsigned NumCostEntries = RD.Costs.size();
+    OS << NumCostEntries << ", " << CostTblIndex << "},\n";
+    CostTblIndex += NumCostEntries;
+  }
+  OS << "};\n";
+
+  // Now generate a table for the extra processor info.
+  OS << "\nstatic const llvm::MCExtraProcessorInfo " << ProcModel.ModelName
+     << "ExtraInfo = {\n  " << ProcModel.ModelName << "RegisterFiles,\n  "
+     << (1 + ProcModel.RegisterFiles.size())
+     << ", // Number of register files.\n  "
+     << ProcModel.ModelName << "RegisterCosts,\n  " << CostTblIndex
+     << " // Number of register cost entries.\n"
+     << "};\n";
 }
 
 void SubtargetEmitter::EmitProcessorResources(const CodeGenProcModel &ProcModel,
@@ -865,7 +917,7 @@ void SubtargetEmitter::GenSchedClassTables(const CodeGenProcModel &ProcModel,
     IdxVec Writes = SC.Writes;
     IdxVec Reads = SC.Reads;
     if (!SC.InstRWs.empty()) {
-      // This class has a default ReadWrite list which can be overriden by
+      // This class has a default ReadWrite list which can be overridden by
       // InstRW definitions.
       Record *RWDef = nullptr;
       for (Record *RW : SC.InstRWs) {
@@ -1161,6 +1213,9 @@ void SubtargetEmitter::EmitSchedClassTables(SchedClassTables &SchedTables,
 void SubtargetEmitter::EmitProcessorModels(raw_ostream &OS) {
   // For each processor model.
   for (const CodeGenProcModel &PM : SchedModels.procModels()) {
+    // Emit extra processor info if available.
+    if (PM.hasExtraProcessorInfo())
+      EmitExtraProcessorInfo(PM, OS);
     // Emit processor resource table.
     if (PM.hasInstrSchedModel())
       EmitProcessorResources(PM, OS);
@@ -1201,9 +1256,13 @@ void SubtargetEmitter::EmitProcessorModels(raw_ostream &OS) {
       OS << "  nullptr, nullptr, 0, 0,"
          << " // No instruction-level machine model.\n";
     if (PM.hasItineraries())
-      OS << "  " << PM.ItinsDef->getName() << "\n";
+      OS << "  " << PM.ItinsDef->getName() << ",\n";
     else
-      OS << "  nullptr // No Itinerary\n";
+      OS << "  nullptr, // No Itinerary\n";
+    if (PM.hasExtraProcessorInfo())
+      OS << "  &" << PM.ModelName << "ExtraInfo\n";
+    else
+      OS << "  nullptr  // No extra processor descriptor\n";
     OS << "};\n";
   }
 }
