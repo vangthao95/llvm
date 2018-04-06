@@ -211,16 +211,40 @@ CodeGenSchedModels::CodeGenSchedModels(RecordKeeper &RK,
   DEBUG(dbgs() << "\n+++ RESOURCE DEFINITIONS (collectProcResources) +++\n");
   collectProcResources();
 
+  // Collect optional processor description.
+  collectOptionalProcessorInfo();
+
+  checkCompleteness();
+}
+
+void CodeGenSchedModels::collectRetireControlUnits() {
+  RecVec Units = Records.getAllDerivedDefinitions("RetireControlUnit");
+
+  for (Record *RCU : Units) {
+    CodeGenProcModel &PM = getProcModel(RCU->getValueAsDef("SchedModel"));
+    if (PM.RetireControlUnit) {
+      PrintError(RCU->getLoc(),
+                 "Expected a single RetireControlUnit definition");
+      PrintNote(PM.RetireControlUnit->getLoc(),
+                "Previous definition of RetireControlUnit was here");
+    }
+    PM.RetireControlUnit = RCU;
+  }
+}
+
+/// Collect optional processor information.
+void CodeGenSchedModels::collectOptionalProcessorInfo() {
   // Find register file definitions for each processor.
   collectRegisterFiles();
 
-  checkCompleteness();
+  // Collect processor RetireControlUnit descriptors if available.
+  collectRetireControlUnits();
 }
 
 /// Gather all processor models.
 void CodeGenSchedModels::collectProcModels() {
   RecVec ProcRecords = Records.getAllDerivedDefinitions("Processor");
-  std::sort(ProcRecords.begin(), ProcRecords.end(), LessRecordFieldName());
+  llvm::sort(ProcRecords.begin(), ProcRecords.end(), LessRecordFieldName());
 
   // Reserve space because we can. Reallocation would be ok.
   ProcModels.reserve(ProcRecords.size()+1);
@@ -339,7 +363,7 @@ void CodeGenSchedModels::collectSchedRW() {
   // Find all ReadWrites referenced by SchedAlias. AliasDefs needs to be sorted
   // for the loop below that initializes Alias vectors.
   RecVec AliasDefs = Records.getAllDerivedDefinitions("SchedAlias");
-  std::sort(AliasDefs.begin(), AliasDefs.end(), LessRecord());
+  llvm::sort(AliasDefs.begin(), AliasDefs.end(), LessRecord());
   for (Record *ADef : AliasDefs) {
     Record *MatchDef = ADef->getValueAsDef("MatchRW");
     Record *AliasDef = ADef->getValueAsDef("AliasRW");
@@ -357,12 +381,12 @@ void CodeGenSchedModels::collectSchedRW() {
   }
   // Sort and add the SchedReadWrites directly referenced by instructions or
   // itinerary resources. Index reads and writes in separate domains.
-  std::sort(SWDefs.begin(), SWDefs.end(), LessRecord());
+  llvm::sort(SWDefs.begin(), SWDefs.end(), LessRecord());
   for (Record *SWDef : SWDefs) {
     assert(!getSchedRWIdx(SWDef, /*IsRead=*/false) && "duplicate SchedWrite");
     SchedWrites.emplace_back(SchedWrites.size(), SWDef);
   }
-  std::sort(SRDefs.begin(), SRDefs.end(), LessRecord());
+  llvm::sort(SRDefs.begin(), SRDefs.end(), LessRecord());
   for (Record *SRDef : SRDefs) {
     assert(!getSchedRWIdx(SRDef, /*IsRead-*/true) && "duplicate SchedWrite");
     SchedReads.emplace_back(SchedReads.size(), SRDef);
@@ -589,7 +613,7 @@ void CodeGenSchedModels::collectSchedClasses() {
   }
   // Create classes for InstRW defs.
   RecVec InstRWDefs = Records.getAllDerivedDefinitions("InstRW");
-  std::sort(InstRWDefs.begin(), InstRWDefs.end(), LessRecord());
+  llvm::sort(InstRWDefs.begin(), InstRWDefs.end(), LessRecord());
   DEBUG(dbgs() << "\n+++ SCHED CLASSES (createInstRWClass) +++\n");
   for (Record *RWDef : InstRWDefs)
     createInstRWClass(RWDef);
@@ -886,7 +910,7 @@ void CodeGenSchedModels::collectProcItins() {
 // Gather the read/write types for each itinerary class.
 void CodeGenSchedModels::collectProcItinRW() {
   RecVec ItinRWDefs = Records.getAllDerivedDefinitions("ItinRW");
-  std::sort(ItinRWDefs.begin(), ItinRWDefs.end(), LessRecord());
+  llvm::sort(ItinRWDefs.begin(), ItinRWDefs.end(), LessRecord());
   for (Record *RWDef  : ItinRWDefs) {
     if (!RWDef->getValueInit("SchedModel")->isComplete())
       PrintFatalError(RWDef->getLoc(), "SchedModel is undefined");
@@ -1585,12 +1609,12 @@ void CodeGenSchedModels::collectProcResources() {
   }
   // Finalize each ProcModel by sorting the record arrays.
   for (CodeGenProcModel &PM : ProcModels) {
-    std::sort(PM.WriteResDefs.begin(), PM.WriteResDefs.end(),
-              LessRecord());
-    std::sort(PM.ReadAdvanceDefs.begin(), PM.ReadAdvanceDefs.end(),
-              LessRecord());
-    std::sort(PM.ProcResourceDefs.begin(), PM.ProcResourceDefs.end(),
-              LessRecord());
+    llvm::sort(PM.WriteResDefs.begin(), PM.WriteResDefs.end(),
+               LessRecord());
+    llvm::sort(PM.ReadAdvanceDefs.begin(), PM.ReadAdvanceDefs.end(),
+               LessRecord());
+    llvm::sort(PM.ProcResourceDefs.begin(), PM.ProcResourceDefs.end(),
+               LessRecord());
     DEBUG(
       PM.dump();
       dbgs() << "WriteResDefs: ";
@@ -1626,6 +1650,7 @@ void CodeGenSchedModels::checkCompleteness() {
   bool Complete = true;
   bool HadCompleteModel = false;
   for (const CodeGenProcModel &ProcModel : procModels()) {
+    const bool HasItineraries = ProcModel.hasItineraries();
     if (!ProcModel.ModelDef->getValueAsBit("CompleteModel"))
       continue;
     for (const CodeGenInstruction *Inst : Target.getInstructionsByEnumValue()) {
@@ -1646,7 +1671,7 @@ void CodeGenSchedModels::checkCompleteness() {
       const CodeGenSchedClass &SC = getSchedClass(SCIdx);
       if (!SC.Writes.empty())
         continue;
-      if (SC.ItinClassDef != nullptr &&
+      if (HasItineraries && SC.ItinClassDef != nullptr &&
           SC.ItinClassDef->getName() != "NoItinerary")
         continue;
 
