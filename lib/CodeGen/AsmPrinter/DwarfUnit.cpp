@@ -594,10 +594,10 @@ DIE *DwarfUnit::getOrCreateContextDIE(const DIScope *Context) {
     return &getUnitDie();
   if (auto *T = dyn_cast<DIType>(Context))
     return getOrCreateTypeDIE(T);
-  if (auto *NS = dyn_cast<DINamespace>(Context))
-    return getOrCreateNameSpace(NS);
   if (auto *CB = dyn_cast<DICommonBlock>(Context))
     return getOrCreateCommonBlock(CB);
+  if (auto *NS = dyn_cast<DINamespace>(Context))
+    return getOrCreateNameSpace(NS);
   if (auto *SP = dyn_cast<DISubprogram>(Context))
     return getOrCreateSubprogramDIE(SP);
   if (auto *M = dyn_cast<DIModule>(Context))
