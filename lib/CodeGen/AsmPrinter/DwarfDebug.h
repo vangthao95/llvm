@@ -484,12 +484,6 @@ class DwarfDebug : public DebugHandlerBase {
   /// Emit the reference to the section.
   void emitSectionReference(const DwarfCompileUnit &CU);
 
-  /// Populate dependent type variable map
-  void populateDependentTypeMap();
-
-  /// Clear dependent type tracking map
-  void clearDependentTracking() { VariableInDependentType.clear(); }
-
 protected:
   /// Gather pre-function debug information.
   void beginFunctionImpl(const MachineFunction *MF) override;
@@ -631,21 +625,6 @@ public:
   const DwarfCompileUnit *lookupCU(const DIE *Die) const {
     return CUDieMap.lookup(Die);
   }
-
-  unsigned getStringTypeLoc(const DIStringType *ST) const {
-    auto I = StringTypeLocMap.find(ST);
-    return I != StringTypeLocMap.end() ? I->second : 0;
-  }
-
-  void addStringTypeLoc(const DIStringType *ST, unsigned Loc) {
-    assert(ST);
-    if (Loc)
-      StringTypeLocMap[ST] = Loc;
-  }
-
-  DIE *getSubrangeDie(const DIFortranSubrange *SR) const;
-  void constructSubrangeDie(const DIFortranArrayType *AT,
-                            DbgVariable &DV, DwarfCompileUnit &TheCU);
 
   unsigned getStringTypeLoc(const DIStringType *ST) const {
     auto I = StringTypeLocMap.find(ST);
