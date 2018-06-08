@@ -424,7 +424,7 @@ void llvm::printLLVMNameWithoutPrefix(raw_ostream &OS, StringRef Name) {
   // Okay, we need quotes.  Output the quotes and escape any scary characters as
   // needed.
   OS << '"';
-  PrintEscapedString(Name, OS);
+  printEscapedString(Name, OS);
   OS << '"';
 }
 
@@ -1377,7 +1377,7 @@ static void WriteConstantInternal(raw_ostream &Out, const Constant *CV,
     // i8 with ConstantInt values.
     if (CA->isString()) {
       Out << "c\"";
-      PrintEscapedString(CA->getAsString(), Out);
+      printEscapedString(CA->getAsString(), Out);
       Out << '"';
       return;
     }
@@ -1610,7 +1610,7 @@ void MDFieldPrinter::printString(StringRef Name, StringRef Value,
     return;
 
   Out << FS << Name << ": \"";
-  PrintEscapedString(Value, Out);
+  printEscapedString(Value, Out);
   Out << "\"";
 }
 
@@ -2208,9 +2208,9 @@ static void WriteAsOperandInternal(raw_ostream &Out, const Value *V,
     if (IA->getDialect() == InlineAsm::AD_Intel)
       Out << "inteldialect ";
     Out << '"';
-    PrintEscapedString(IA->getAsmString(), Out);
+    printEscapedString(IA->getAsmString(), Out);
     Out << "\", \"";
-    PrintEscapedString(IA->getConstraintString(), Out);
+    printEscapedString(IA->getConstraintString(), Out);
     Out << '"';
     return;
   }
@@ -2289,7 +2289,7 @@ static void WriteAsOperandInternal(raw_ostream &Out, const Metadata *MD,
 
   if (const MDString *MDS = dyn_cast<MDString>(MD)) {
     Out << "!\"";
-    PrintEscapedString(MDS->getString(), Out);
+    printEscapedString(MDS->getString(), Out);
     Out << '"';
     return;
   }
@@ -2444,7 +2444,7 @@ void AssemblyWriter::writeSyncScope(const LLVMContext &Context,
       Context.getSyncScopeNames(SSNs);
 
     Out << " syncscope(\"";
-    PrintEscapedString(SSNs[SSID], Out);
+    printEscapedString(SSNs[SSID], Out);
     Out << "\")";
     break;
   }
@@ -2505,7 +2505,7 @@ void AssemblyWriter::writeOperandBundles(ImmutableCallSite CS) {
     FirstBundle = false;
 
     Out << '"';
-    PrintEscapedString(BU.getTagName(), Out);
+    printEscapedString(BU.getTagName(), Out);
     Out << '"';
 
     Out << '(';
@@ -2541,7 +2541,7 @@ void AssemblyWriter::printModule(const Module *M) {
 
   if (!M->getSourceFileName().empty()) {
     Out << "source_filename = \"";
-    PrintEscapedString(M->getSourceFileName(), Out);
+    printEscapedString(M->getSourceFileName(), Out);
     Out << "\"\n";
   }
 
@@ -2563,7 +2563,7 @@ void AssemblyWriter::printModule(const Module *M) {
       // We found a newline, print the portion of the asm string from the
       // last newline up to this newline.
       Out << "module asm \"";
-      PrintEscapedString(Front, Out);
+      printEscapedString(Front, Out);
       Out << "\"\n";
     } while (!Asm.empty());
   }
@@ -3197,7 +3197,7 @@ void AssemblyWriter::printGlobal(const GlobalVariable *GV) {
 
   if (GV->hasSection()) {
     Out << ", section \"";
-    PrintEscapedString(GV->getSection(), Out);
+    printEscapedString(GV->getSection(), Out);
     Out << '"';
   }
   maybePrintComdat(Out, *GV);
@@ -3381,7 +3381,7 @@ void AssemblyWriter::printFunction(const Function *F) {
     Out << " #" << Machine.getAttributeGroupSlot(Attrs.getFnAttributes());
   if (F->hasSection()) {
     Out << " section \"";
-    PrintEscapedString(F->getSection(), Out);
+    printEscapedString(F->getSection(), Out);
     Out << '"';
   }
   maybePrintComdat(Out, *F);
