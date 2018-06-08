@@ -1362,12 +1362,12 @@ void DwarfUnit::constructFortranSubrangeDIE(DIE &Buffer,
 
   if (!SR->getLowerBound()) {
     int64_t BVC = SR->getCLowerBound();
-    addSInt(DW_Subrange, dwarf::DW_AT_lower_bound, None, BVC);
+    addSInt(DW_Subrange, dwarf::DW_AT_lower_bound, dwarf::DW_FORM_sdata, BVC);
   }
 
   if ((!SR->getUpperBound()) && (!SR->noUpperBound())) {
     int64_t BVC = SR->getCUpperBound();
-    addSInt(DW_Subrange, dwarf::DW_AT_upper_bound, None, BVC);
+    addSInt(DW_Subrange, dwarf::DW_AT_upper_bound, dwarf::DW_FORM_sdata, BVC);
   }
 }
 
