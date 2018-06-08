@@ -28,6 +28,7 @@
 #include "llvm/Bitcode/BitCodes.h"
 #include "llvm/Bitcode/BitstreamWriter.h"
 #include "llvm/Bitcode/LLVMBitCodes.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CallSite.h"
@@ -342,6 +343,8 @@ private:
                              unsigned Abbrev);
   void writeDILocalVariable(const DILocalVariable *N,
                             SmallVectorImpl<uint64_t> &Record, unsigned Abbrev);
+  void writeDILabel(const DILabel *N,
+                    SmallVectorImpl<uint64_t> &Record, unsigned Abbrev);
   void writeDIExpression(const DIExpression *N,
                          SmallVectorImpl<uint64_t> &Record, unsigned Abbrev);
   void writeDIGlobalVariableExpression(const DIGlobalVariableExpression *N,
@@ -681,6 +684,8 @@ static uint64_t getAttrKindEncoding(Attribute::AttrKind Kind) {
     return bitc::ATTR_KIND_STACK_PROTECT_STRONG;
   case Attribute::SafeStack:
     return bitc::ATTR_KIND_SAFESTACK;
+  case Attribute::ShadowCallStack:
+    return bitc::ATTR_KIND_SHADOWCALLSTACK;
   case Attribute::StrictFP:
     return bitc::ATTR_KIND_STRICT_FP;
   case Attribute::StructRet:
@@ -1685,7 +1690,7 @@ void ModuleBitcodeWriter::writeDISubprogram(const DISubprogram *N,
   Record.push_back(VE.getMetadataOrNullID(N->getRawUnit()));
   Record.push_back(VE.getMetadataOrNullID(N->getTemplateParams().get()));
   Record.push_back(VE.getMetadataOrNullID(N->getDeclaration()));
-  Record.push_back(VE.getMetadataOrNullID(N->getVariables().get()));
+  Record.push_back(VE.getMetadataOrNullID(N->getRetainedNodes().get()));
   Record.push_back(N->getThisAdjustment());
   Record.push_back(VE.getMetadataOrNullID(N->getThrownTypes().get()));
 
@@ -1839,6 +1844,19 @@ void ModuleBitcodeWriter::writeDILocalVariable(
   Record.push_back(N->getAlignInBits());
 
   Stream.EmitRecord(bitc::METADATA_LOCAL_VAR, Record, Abbrev);
+  Record.clear();
+}
+
+void ModuleBitcodeWriter::writeDILabel(
+    const DILabel *N, SmallVectorImpl<uint64_t> &Record,
+    unsigned Abbrev) {
+  Record.push_back((uint64_t)N->isDistinct());
+  Record.push_back(VE.getMetadataOrNullID(N->getScope()));
+  Record.push_back(VE.getMetadataOrNullID(N->getRawName()));
+  Record.push_back(VE.getMetadataOrNullID(N->getFile()));
+  Record.push_back(N->getLine());
+
+  Stream.EmitRecord(bitc::METADATA_LABEL, Record, Abbrev);
   Record.clear();
 }
 
@@ -3542,7 +3560,7 @@ void ModuleBitcodeWriterBase::writeModuleLevelReferences(
     NameVals.push_back(VE.getValueID(RI.getValue()));
   // Sort the refs for determinism output, the vector returned by FS->refs() has
   // been initialized from a DenseSet.
-  std::sort(NameVals.begin() + SizeBeforeRefs, NameVals.end());
+  llvm::sort(NameVals.begin() + SizeBeforeRefs, NameVals.end());
 
   Stream.EmitRecord(bitc::FS_PERMODULE_GLOBALVAR_INIT_REFS, NameVals,
                     FSModRefsAbbrev);

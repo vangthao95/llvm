@@ -129,9 +129,9 @@
 ; CHECK-NEXT:       Machine Natural Loop Construction
 ; CHECK-NEXT:       Machine Block Frequency Analysis
 ; CHECK-NEXT:       MachinePostDominator Tree Construction
-; CHECK-NEXT:       Shrink Wrapping analysis
 ; CHECK-NEXT:       Lazy Machine Block Frequency Analysis
 ; CHECK-NEXT:       Machine Optimization Remark Emitter
+; CHECK-NEXT:       Shrink Wrapping analysis
 ; CHECK-NEXT:       Prologue/Epilogue Insertion & Frame Finalization
 ; CHECK-NEXT:       Control Flow Optimizer
 ; CHECK-NEXT:       Tail Duplication
@@ -156,8 +156,6 @@
 ; CHECK-NEXT:       Implement the 'patchable-function' attribute
 ; CHECK-NEXT:       Lazy Machine Block Frequency Analysis
 ; CHECK-NEXT:       Machine Optimization Remark Emitter
-; CHECK-NEXT:       MachineDominator Tree Construction
-; CHECK-NEXT:       Machine Natural Loop Construction
 ; CHECK-NEXT:       AArch64 Assembly Printer
 ; CHECK-NEXT:       Free MachineFunction
 ; CHECK-NEXT: Pass Arguments:  -domtree

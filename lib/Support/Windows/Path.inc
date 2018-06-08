@@ -17,6 +17,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/WindowsError.h"
 #include <fcntl.h>
 #include <io.h>
@@ -45,6 +46,7 @@ typedef int errno_t;
 using namespace llvm;
 
 using llvm::sys::windows::UTF8ToUTF16;
+using llvm::sys::windows::CurCPToUTF16;
 using llvm::sys::windows::UTF16ToUTF8;
 using llvm::sys::path::widenPath;
 
@@ -120,6 +122,8 @@ std::error_code widenPath(const Twine &Path8,
 } // end namespace path
 
 namespace fs {
+
+const file_t kInvalidFile = INVALID_HANDLE_VALUE;
 
 std::string getMainExecutable(const char *argv0, void *MainExecAddr) {
   SmallVector<wchar_t, MAX_PATH> PathName;
@@ -1031,123 +1035,174 @@ ErrorOr<basic_file_status> directory_entry::status() const {
   return Status;
 }
 
-static std::error_code directoryRealPath(const Twine &Name,
-                                         SmallVectorImpl<char> &RealPath) {
-  SmallVector<wchar_t, 128> PathUTF16;
+static std::error_code nativeFileToFd(Expected<HANDLE> H, int &ResultFD,
+                                      OpenFlags Flags) {
+  int CrtOpenFlags = 0;
+  if (Flags & OF_Append)
+    CrtOpenFlags |= _O_APPEND;
 
+  if (Flags & OF_Text)
+    CrtOpenFlags |= _O_TEXT;
+
+  ResultFD = -1;
+  if (!H)
+    return errorToErrorCode(H.takeError());
+
+  ResultFD = ::_open_osfhandle(intptr_t(*H), CrtOpenFlags);
+  if (ResultFD == -1) {
+    ::CloseHandle(*H);
+    return mapWindowsError(ERROR_INVALID_HANDLE);
+  }
+  return std::error_code();
+}
+
+static DWORD nativeOpenFlags(OpenFlags Flags) {
+  DWORD Result = 0;
+  if (Flags & OF_Delete)
+    Result |= FILE_FLAG_DELETE_ON_CLOSE;
+
+  if (Result == 0)
+    Result = FILE_ATTRIBUTE_NORMAL;
+  return Result;
+}
+
+static DWORD nativeDisposition(CreationDisposition Disp, OpenFlags Flags) {
+  // This is a compatibility hack.  Really we should respect the creation
+  // disposition, but a lot of old code relied on the implicit assumption that
+  // OF_Append implied it would open an existing file.  Since the disposition is
+  // now explicit and defaults to CD_CreateAlways, this assumption would cause
+  // any usage of OF_Append to append to a new file, even if the file already
+  // existed.  A better solution might have two new creation dispositions:
+  // CD_AppendAlways and CD_AppendNew.  This would also address the problem of
+  // OF_Append being used on a read-only descriptor, which doesn't make sense.
+  if (Flags & OF_Append)
+    return OPEN_ALWAYS;
+
+  switch (Disp) {
+  case CD_CreateAlways:
+    return CREATE_ALWAYS;
+  case CD_CreateNew:
+    return CREATE_NEW;
+  case CD_OpenAlways:
+    return OPEN_ALWAYS;
+  case CD_OpenExisting:
+    return OPEN_EXISTING;
+  }
+  llvm_unreachable("unreachable!");
+}
+
+static DWORD nativeAccess(FileAccess Access, OpenFlags Flags) {
+  DWORD Result = 0;
+  if (Access & FA_Read)
+    Result |= GENERIC_READ;
+  if (Access & FA_Write)
+    Result |= GENERIC_WRITE;
+  if (Flags & OF_Delete)
+    Result |= DELETE;
+  return Result;
+}
+
+static std::error_code openNativeFileInternal(const Twine &Name,
+                                              file_t &ResultFile, DWORD Disp,
+                                              DWORD Access, DWORD Flags,
+                                              bool Inherit = false) {
+  SmallVector<wchar_t, 128> PathUTF16;
   if (std::error_code EC = widenPath(Name, PathUTF16))
     return EC;
 
+  SECURITY_ATTRIBUTES SA;
+  SA.nLength = sizeof(SA);
+  SA.lpSecurityDescriptor = nullptr;
+  SA.bInheritHandle = Inherit;
+
   HANDLE H =
-      ::CreateFileW(PathUTF16.begin(), GENERIC_READ,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                    NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
-  if (H == INVALID_HANDLE_VALUE)
-    return mapWindowsError(GetLastError());
-  std::error_code EC = realPathFromHandle(H, RealPath);
-  ::CloseHandle(H);
+      ::CreateFileW(PathUTF16.begin(), Access,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &SA,
+                    Disp, Flags, NULL);
+  if (H == INVALID_HANDLE_VALUE) {
+    DWORD LastError = ::GetLastError();
+    std::error_code EC = mapWindowsError(LastError);
+    // Provide a better error message when trying to open directories.
+    // This only runs if we failed to open the file, so there is probably
+    // no performances issues.
+    if (LastError != ERROR_ACCESS_DENIED)
+      return EC;
+    if (is_directory(Name))
+      return make_error_code(errc::is_a_directory);
+    return EC;
+  }
+  ResultFile = H;
+  return std::error_code();
+}
+
+Expected<file_t> openNativeFile(const Twine &Name, CreationDisposition Disp,
+                                FileAccess Access, OpenFlags Flags,
+                                unsigned Mode) {
+  // Verify that we don't have both "append" and "excl".
+  assert((!(Disp == CD_CreateNew) || !(Flags & OF_Append)) &&
+         "Cannot specify both 'CreateNew' and 'Append' file creation flags!");
+
+  DWORD NativeFlags = nativeOpenFlags(Flags);
+  DWORD NativeDisp = nativeDisposition(Disp, Flags);
+  DWORD NativeAccess = nativeAccess(Access, Flags);
+
+  bool Inherit = false;
+  if (Flags & OF_ChildInherit)
+    Inherit = true;
+
+  file_t Result;
+  std::error_code EC = openNativeFileInternal(
+      Name, Result, NativeDisp, NativeAccess, NativeFlags, Inherit);
+  if (EC)
+    return errorCodeToError(EC);
+  return Result;
+}
+
+std::error_code openFile(const Twine &Name, int &ResultFD,
+                         CreationDisposition Disp, FileAccess Access,
+                         OpenFlags Flags, unsigned int Mode) {
+  Expected<file_t> Result = openNativeFile(Name, Disp, Access, Flags);
+  if (!Result)
+    return errorToErrorCode(Result.takeError());
+
+  return nativeFileToFd(*Result, ResultFD, Flags);
+}
+
+static std::error_code directoryRealPath(const Twine &Name,
+                                         SmallVectorImpl<char> &RealPath) {
+  file_t File;
+  std::error_code EC = openNativeFileInternal(
+      Name, File, OPEN_EXISTING, GENERIC_READ, FILE_FLAG_BACKUP_SEMANTICS);
+  if (EC)
+    return EC;
+
+  EC = realPathFromHandle(File, RealPath);
+  ::CloseHandle(File);
   return EC;
 }
 
 std::error_code openFileForRead(const Twine &Name, int &ResultFD,
+                                OpenFlags Flags,
                                 SmallVectorImpl<char> *RealPath) {
-  SmallVector<wchar_t, 128> PathUTF16;
-
-  if (std::error_code EC = widenPath(Name, PathUTF16))
-    return EC;
-
-  HANDLE H =
-      ::CreateFileW(PathUTF16.begin(), GENERIC_READ,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-  if (H == INVALID_HANDLE_VALUE) {
-    DWORD LastError = ::GetLastError();
-    std::error_code EC = mapWindowsError(LastError);
-    // Provide a better error message when trying to open directories.
-    // This only runs if we failed to open the file, so there is probably
-    // no performances issues.
-    if (LastError != ERROR_ACCESS_DENIED)
-      return EC;
-    if (is_directory(Name))
-      return make_error_code(errc::is_a_directory);
-    return EC;
-  }
-
-  int FD = ::_open_osfhandle(intptr_t(H), 0);
-  if (FD == -1) {
-    ::CloseHandle(H);
-    return mapWindowsError(ERROR_INVALID_HANDLE);
-  }
-
-  // Fetch the real name of the file, if the user asked
-  if (RealPath)
-    realPathFromHandle(H, *RealPath);
-
-  ResultFD = FD;
-  return std::error_code();
+  Expected<HANDLE> NativeFile = openNativeFileForRead(Name, Flags, RealPath);
+  return nativeFileToFd(std::move(NativeFile), ResultFD, OF_None);
 }
 
-std::error_code openFileForWrite(const Twine &Name, int &ResultFD,
-                            sys::fs::OpenFlags Flags, unsigned Mode) {
-  // Verify that we don't have both "append" and "excl".
-  assert((!(Flags & sys::fs::F_Excl) || !(Flags & sys::fs::F_Append)) &&
-         "Cannot specify both 'excl' and 'append' file creation flags!");
+Expected<file_t> openNativeFileForRead(const Twine &Name, OpenFlags Flags,
+                                       SmallVectorImpl<char> *RealPath) {
+  Expected<file_t> Result =
+      openNativeFile(Name, CD_OpenExisting, FA_Read, Flags);
 
-  SmallVector<wchar_t, 128> PathUTF16;
+  // Fetch the real name of the file, if the user asked
+  if (Result && RealPath)
+    realPathFromHandle(*Result, *RealPath);
 
-  if (std::error_code EC = widenPath(Name, PathUTF16))
-    return EC;
+  return std::move(Result);
+}
 
-  DWORD CreationDisposition;
-  if (Flags & F_Excl)
-    CreationDisposition = CREATE_NEW;
-  else if ((Flags & F_Append) || (Flags & F_NoTrunc))
-    CreationDisposition = OPEN_ALWAYS;
-  else
-    CreationDisposition = CREATE_ALWAYS;
-
-  DWORD Access = GENERIC_WRITE;
-  DWORD Attributes = FILE_ATTRIBUTE_NORMAL;
-  if (Flags & F_RW)
-    Access |= GENERIC_READ;
-  if (Flags & F_Delete) {
-    Access |= DELETE;
-    Attributes |= FILE_FLAG_DELETE_ON_CLOSE;
-  }
-
-  HANDLE H =
-      ::CreateFileW(PathUTF16.data(), Access,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                    NULL, CreationDisposition, Attributes, NULL);
-
-  if (H == INVALID_HANDLE_VALUE) {
-    DWORD LastError = ::GetLastError();
-    std::error_code EC = mapWindowsError(LastError);
-    // Provide a better error message when trying to open directories.
-    // This only runs if we failed to open the file, so there is probably
-    // no performances issues.
-    if (LastError != ERROR_ACCESS_DENIED)
-      return EC;
-    if (is_directory(Name))
-      return make_error_code(errc::is_a_directory);
-    return EC;
-  }
-
-  int OpenFlags = 0;
-  if (Flags & F_Append)
-    OpenFlags |= _O_APPEND;
-
-  if (Flags & F_Text)
-    OpenFlags |= _O_TEXT;
-
-  int FD = ::_open_osfhandle(intptr_t(H), OpenFlags);
-  if (FD == -1) {
-    ::CloseHandle(H);
-    return mapWindowsError(ERROR_INVALID_HANDLE);
-  }
-
-  ResultFD = FD;
-  return std::error_code();
+void closeFile(file_t &F) {
+  ::CloseHandle(F);
+  F = kInvalidFile;
 }
 
 std::error_code remove_directories(const Twine &path, bool IgnoreErrors) {
@@ -1218,7 +1273,8 @@ std::error_code real_path(const Twine &path, SmallVectorImpl<char> &dest,
     return directoryRealPath(path, dest);
 
   int fd;
-  if (std::error_code EC = llvm::sys::fs::openFileForRead(path, fd, &dest))
+  if (std::error_code EC =
+          llvm::sys::fs::openFileForRead(path, fd, OF_None, &dest))
     return EC;
   ::close(fd);
   return std::error_code();
@@ -1293,23 +1349,26 @@ void system_temp_directory(bool ErasedOnReboot, SmallVectorImpl<char> &Result) {
 } // end namespace path
 
 namespace windows {
-std::error_code UTF8ToUTF16(llvm::StringRef utf8,
-                            llvm::SmallVectorImpl<wchar_t> &utf16) {
-  if (!utf8.empty()) {
-    int len = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.begin(),
-                                    utf8.size(), utf16.begin(), 0);
+std::error_code CodePageToUTF16(unsigned codepage,
+                                llvm::StringRef original,
+                                llvm::SmallVectorImpl<wchar_t> &utf16) {
+  if (!original.empty()) {
+    int len = ::MultiByteToWideChar(codepage, MB_ERR_INVALID_CHARS, original.begin(),
+                                    original.size(), utf16.begin(), 0);
 
-    if (len == 0)
+    if (len == 0) {
       return mapWindowsError(::GetLastError());
+    }
 
     utf16.reserve(len + 1);
     utf16.set_size(len);
 
-    len = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.begin(),
-                                utf8.size(), utf16.begin(), utf16.size());
+    len = ::MultiByteToWideChar(codepage, MB_ERR_INVALID_CHARS, original.begin(),
+                                original.size(), utf16.begin(), utf16.size());
 
-    if (len == 0)
+    if (len == 0) {
       return mapWindowsError(::GetLastError());
+    }
   }
 
   // Make utf16 null terminated.
@@ -1319,32 +1378,44 @@ std::error_code UTF8ToUTF16(llvm::StringRef utf8,
   return std::error_code();
 }
 
+std::error_code UTF8ToUTF16(llvm::StringRef utf8,
+                            llvm::SmallVectorImpl<wchar_t> &utf16) {
+  return CodePageToUTF16(CP_UTF8, utf8, utf16);
+}
+
+std::error_code CurCPToUTF16(llvm::StringRef curcp,
+                            llvm::SmallVectorImpl<wchar_t> &utf16) {
+  return CodePageToUTF16(CP_ACP, curcp, utf16);
+}
+
 static
 std::error_code UTF16ToCodePage(unsigned codepage, const wchar_t *utf16,
                                 size_t utf16_len,
-                                llvm::SmallVectorImpl<char> &utf8) {
+                                llvm::SmallVectorImpl<char> &converted) {
   if (utf16_len) {
     // Get length.
-    int len = ::WideCharToMultiByte(codepage, 0, utf16, utf16_len, utf8.begin(),
+    int len = ::WideCharToMultiByte(codepage, 0, utf16, utf16_len, converted.begin(),
                                     0, NULL, NULL);
 
-    if (len == 0)
+    if (len == 0) {
       return mapWindowsError(::GetLastError());
+    }
 
-    utf8.reserve(len);
-    utf8.set_size(len);
+    converted.reserve(len);
+    converted.set_size(len);
 
     // Now do the actual conversion.
-    len = ::WideCharToMultiByte(codepage, 0, utf16, utf16_len, utf8.data(),
-                                utf8.size(), NULL, NULL);
+    len = ::WideCharToMultiByte(codepage, 0, utf16, utf16_len, converted.data(),
+                                converted.size(), NULL, NULL);
 
-    if (len == 0)
+    if (len == 0) {
       return mapWindowsError(::GetLastError());
+    }
   }
 
-  // Make utf8 null terminated.
-  utf8.push_back(0);
-  utf8.pop_back();
+  // Make the new string null terminated.
+  converted.push_back(0);
+  converted.pop_back();
 
   return std::error_code();
 }
@@ -1355,8 +1426,8 @@ std::error_code UTF16ToUTF8(const wchar_t *utf16, size_t utf16_len,
 }
 
 std::error_code UTF16ToCurCP(const wchar_t *utf16, size_t utf16_len,
-                             llvm::SmallVectorImpl<char> &utf8) {
-  return UTF16ToCodePage(CP_ACP, utf16, utf16_len, utf8);
+                             llvm::SmallVectorImpl<char> &curcp) {
+  return UTF16ToCodePage(CP_ACP, utf16, utf16_len, curcp);
 }
 
 } // end namespace windows

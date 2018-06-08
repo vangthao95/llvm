@@ -1607,13 +1607,13 @@ define <8 x float> @test_dpps(<8 x float> %a0, <8 x float> %a1, <8 x float> *%a2
 ; GENERIC-LABEL: test_dpps:
 ; GENERIC:       # %bb.0:
 ; GENERIC-NEXT:    vdpps $7, %ymm1, %ymm0, %ymm0 # sched: [12:2.00]
-; GENERIC-NEXT:    vdpps $7, (%rdi), %ymm0, %ymm0 # sched: [7:1.00]
+; GENERIC-NEXT:    vdpps $7, (%rdi), %ymm0, %ymm0 # sched: [19:2.00]
 ; GENERIC-NEXT:    retq # sched: [1:1.00]
 ;
 ; SANDY-LABEL: test_dpps:
 ; SANDY:       # %bb.0:
 ; SANDY-NEXT:    vdpps $7, %ymm1, %ymm0, %ymm0 # sched: [12:2.00]
-; SANDY-NEXT:    vdpps $7, (%rdi), %ymm0, %ymm0 # sched: [7:1.00]
+; SANDY-NEXT:    vdpps $7, (%rdi), %ymm0, %ymm0 # sched: [19:2.00]
 ; SANDY-NEXT:    retq # sched: [1:1.00]
 ;
 ; HASWELL-LABEL: test_dpps:
@@ -1648,8 +1648,8 @@ define <8 x float> @test_dpps(<8 x float> %a0, <8 x float> %a1, <8 x float> *%a2
 ;
 ; ZNVER1-LABEL: test_dpps:
 ; ZNVER1:       # %bb.0:
-; ZNVER1-NEXT:    vdpps $7, %ymm1, %ymm0, %ymm0 # sched: [100:?]
-; ZNVER1-NEXT:    vdpps $7, (%rdi), %ymm0, %ymm0 # sched: [100:?]
+; ZNVER1-NEXT:    vdpps $7, %ymm1, %ymm0, %ymm0 # sched: [100:0.25]
+; ZNVER1-NEXT:    vdpps $7, (%rdi), %ymm0, %ymm0 # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   %1 = call <8 x float> @llvm.x86.avx.dp.ps.256(<8 x float> %a0, <8 x float> %a1, i8 7)
   %2 = load <8 x float>, <8 x float> *%a2, align 32
@@ -1662,14 +1662,14 @@ define <4 x float> @test_extractf128(<8 x float> %a0, <8 x float> %a1, <4 x floa
 ; GENERIC-LABEL: test_extractf128:
 ; GENERIC:       # %bb.0:
 ; GENERIC-NEXT:    vextractf128 $1, %ymm0, %xmm0 # sched: [1:1.00]
-; GENERIC-NEXT:    vextractf128 $1, %ymm1, (%rdi) # sched: [5:1.00]
+; GENERIC-NEXT:    vextractf128 $1, %ymm1, (%rdi) # sched: [1:1.00]
 ; GENERIC-NEXT:    vzeroupper # sched: [100:0.33]
 ; GENERIC-NEXT:    retq # sched: [1:1.00]
 ;
 ; SANDY-LABEL: test_extractf128:
 ; SANDY:       # %bb.0:
 ; SANDY-NEXT:    vextractf128 $1, %ymm0, %xmm0 # sched: [1:1.00]
-; SANDY-NEXT:    vextractf128 $1, %ymm1, (%rdi) # sched: [5:1.00]
+; SANDY-NEXT:    vextractf128 $1, %ymm1, (%rdi) # sched: [1:1.00]
 ; SANDY-NEXT:    vzeroupper # sched: [100:0.33]
 ; SANDY-NEXT:    retq # sched: [1:1.00]
 ;
@@ -1711,7 +1711,7 @@ define <4 x float> @test_extractf128(<8 x float> %a0, <8 x float> %a1, <4 x floa
 ; ZNVER1:       # %bb.0:
 ; ZNVER1-NEXT:    vextractf128 $1, %ymm0, %xmm0 # sched: [1:0.33]
 ; ZNVER1-NEXT:    vextractf128 $1, %ymm1, (%rdi) # sched: [8:0.50]
-; ZNVER1-NEXT:    vzeroupper # sched: [100:?]
+; ZNVER1-NEXT:    vzeroupper # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   %1 = shufflevector <8 x float> %a0, <8 x float> undef, <4 x i32> <i32 4, i32 5, i32 6, i32 7>
   %2 = shufflevector <8 x float> %a1, <8 x float> undef, <4 x i32> <i32 4, i32 5, i32 6, i32 7>
@@ -1764,8 +1764,8 @@ define <4 x double> @test_haddpd(<4 x double> %a0, <4 x double> %a1, <4 x double
 ;
 ; ZNVER1-LABEL: test_haddpd:
 ; ZNVER1:       # %bb.0:
-; ZNVER1-NEXT:    vhaddpd %ymm1, %ymm0, %ymm0 # sched: [100:?]
-; ZNVER1-NEXT:    vhaddpd (%rdi), %ymm0, %ymm0 # sched: [100:?]
+; ZNVER1-NEXT:    vhaddpd %ymm1, %ymm0, %ymm0 # sched: [100:0.25]
+; ZNVER1-NEXT:    vhaddpd (%rdi), %ymm0, %ymm0 # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   %1 = call <4 x double> @llvm.x86.avx.hadd.pd.256(<4 x double> %a0, <4 x double> %a1)
   %2 = load <4 x double>, <4 x double> *%a2, align 32
@@ -1819,8 +1819,8 @@ define <8 x float> @test_haddps(<8 x float> %a0, <8 x float> %a1, <8 x float> *%
 ;
 ; ZNVER1-LABEL: test_haddps:
 ; ZNVER1:       # %bb.0:
-; ZNVER1-NEXT:    vhaddps %ymm1, %ymm0, %ymm0 # sched: [100:?]
-; ZNVER1-NEXT:    vhaddps (%rdi), %ymm0, %ymm0 # sched: [100:?]
+; ZNVER1-NEXT:    vhaddps %ymm1, %ymm0, %ymm0 # sched: [100:0.25]
+; ZNVER1-NEXT:    vhaddps (%rdi), %ymm0, %ymm0 # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   %1 = call <8 x float> @llvm.x86.avx.hadd.ps.256(<8 x float> %a0, <8 x float> %a1)
   %2 = load <8 x float>, <8 x float> *%a2, align 32
@@ -1874,8 +1874,8 @@ define <4 x double> @test_hsubpd(<4 x double> %a0, <4 x double> %a1, <4 x double
 ;
 ; ZNVER1-LABEL: test_hsubpd:
 ; ZNVER1:       # %bb.0:
-; ZNVER1-NEXT:    vhsubpd %ymm1, %ymm0, %ymm0 # sched: [100:?]
-; ZNVER1-NEXT:    vhsubpd (%rdi), %ymm0, %ymm0 # sched: [100:?]
+; ZNVER1-NEXT:    vhsubpd %ymm1, %ymm0, %ymm0 # sched: [100:0.25]
+; ZNVER1-NEXT:    vhsubpd (%rdi), %ymm0, %ymm0 # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   %1 = call <4 x double> @llvm.x86.avx.hsub.pd.256(<4 x double> %a0, <4 x double> %a1)
   %2 = load <4 x double>, <4 x double> *%a2, align 32
@@ -1929,8 +1929,8 @@ define <8 x float> @test_hsubps(<8 x float> %a0, <8 x float> %a1, <8 x float> *%
 ;
 ; ZNVER1-LABEL: test_hsubps:
 ; ZNVER1:       # %bb.0:
-; ZNVER1-NEXT:    vhsubps %ymm1, %ymm0, %ymm0 # sched: [100:?]
-; ZNVER1-NEXT:    vhsubps (%rdi), %ymm0, %ymm0 # sched: [100:?]
+; ZNVER1-NEXT:    vhsubps %ymm1, %ymm0, %ymm0 # sched: [100:0.25]
+; ZNVER1-NEXT:    vhsubps (%rdi), %ymm0, %ymm0 # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   %1 = call <8 x float> @llvm.x86.avx.hsub.ps.256(<8 x float> %a0, <8 x float> %a1)
   %2 = load <8 x float>, <8 x float> *%a2, align 32
@@ -2007,12 +2007,12 @@ define <8 x float> @test_insertf128(<8 x float> %a0, <4 x float> %a1, <4 x float
 define <32 x i8> @test_lddqu(i8* %a0) {
 ; GENERIC-LABEL: test_lddqu:
 ; GENERIC:       # %bb.0:
-; GENERIC-NEXT:    vlddqu (%rdi), %ymm0 # sched: [6:0.50]
+; GENERIC-NEXT:    vlddqu (%rdi), %ymm0 # sched: [7:0.50]
 ; GENERIC-NEXT:    retq # sched: [1:1.00]
 ;
 ; SANDY-LABEL: test_lddqu:
 ; SANDY:       # %bb.0:
-; SANDY-NEXT:    vlddqu (%rdi), %ymm0 # sched: [6:0.50]
+; SANDY-NEXT:    vlddqu (%rdi), %ymm0 # sched: [7:0.50]
 ; SANDY-NEXT:    retq # sched: [1:1.00]
 ;
 ; HASWELL-LABEL: test_lddqu:
@@ -2159,7 +2159,7 @@ define <4 x double> @test_maskmovpd_ymm(i8* %a0, <4 x i64> %a1, <4 x double> %a2
 ; BTVER2:       # %bb.0:
 ; BTVER2-NEXT:    vmaskmovpd (%rdi), %ymm0, %ymm2 # sched: [6:2.00]
 ; BTVER2-NEXT:    vmaskmovpd %ymm1, %ymm0, (%rdi) # sched: [6:2.00]
-; BTVER2-NEXT:    vmovapd %ymm2, %ymm0 # sched: [1:0.50]
+; BTVER2-NEXT:    vmovapd %ymm2, %ymm0 # sched: [1:1.00]
 ; BTVER2-NEXT:    retq # sched: [4:1.00]
 ;
 ; ZNVER1-LABEL: test_maskmovpd_ymm:
@@ -2285,7 +2285,7 @@ define <8 x float> @test_maskmovps_ymm(i8* %a0, <8 x i32> %a1, <8 x float> %a2) 
 ; BTVER2:       # %bb.0:
 ; BTVER2-NEXT:    vmaskmovps (%rdi), %ymm0, %ymm2 # sched: [6:2.00]
 ; BTVER2-NEXT:    vmaskmovps %ymm1, %ymm0, (%rdi) # sched: [6:2.00]
-; BTVER2-NEXT:    vmovaps %ymm2, %ymm0 # sched: [1:0.50]
+; BTVER2-NEXT:    vmovaps %ymm2, %ymm0 # sched: [1:1.00]
 ; BTVER2-NEXT:    retq # sched: [4:1.00]
 ;
 ; ZNVER1-LABEL: test_maskmovps_ymm:
@@ -2526,14 +2526,14 @@ define <4 x double> @test_movapd(<4 x double> *%a0, <4 x double> *%a1) {
 ; GENERIC:       # %bb.0:
 ; GENERIC-NEXT:    vmovapd (%rdi), %ymm0 # sched: [7:0.50]
 ; GENERIC-NEXT:    vaddpd %ymm0, %ymm0, %ymm0 # sched: [3:1.00]
-; GENERIC-NEXT:    vmovapd %ymm0, (%rsi) # sched: [5:1.00]
+; GENERIC-NEXT:    vmovapd %ymm0, (%rsi) # sched: [1:1.00]
 ; GENERIC-NEXT:    retq # sched: [1:1.00]
 ;
 ; SANDY-LABEL: test_movapd:
 ; SANDY:       # %bb.0:
 ; SANDY-NEXT:    vmovapd (%rdi), %ymm0 # sched: [7:0.50]
 ; SANDY-NEXT:    vaddpd %ymm0, %ymm0, %ymm0 # sched: [3:1.00]
-; SANDY-NEXT:    vmovapd %ymm0, (%rsi) # sched: [5:1.00]
+; SANDY-NEXT:    vmovapd %ymm0, (%rsi) # sched: [1:1.00]
 ; SANDY-NEXT:    retq # sched: [1:1.00]
 ;
 ; HASWELL-LABEL: test_movapd:
@@ -2588,14 +2588,14 @@ define <8 x float> @test_movaps(<8 x float> *%a0, <8 x float> *%a1) {
 ; GENERIC:       # %bb.0:
 ; GENERIC-NEXT:    vmovaps (%rdi), %ymm0 # sched: [7:0.50]
 ; GENERIC-NEXT:    vaddps %ymm0, %ymm0, %ymm0 # sched: [3:1.00]
-; GENERIC-NEXT:    vmovaps %ymm0, (%rsi) # sched: [5:1.00]
+; GENERIC-NEXT:    vmovaps %ymm0, (%rsi) # sched: [1:1.00]
 ; GENERIC-NEXT:    retq # sched: [1:1.00]
 ;
 ; SANDY-LABEL: test_movaps:
 ; SANDY:       # %bb.0:
 ; SANDY-NEXT:    vmovaps (%rdi), %ymm0 # sched: [7:0.50]
 ; SANDY-NEXT:    vaddps %ymm0, %ymm0, %ymm0 # sched: [3:1.00]
-; SANDY-NEXT:    vmovaps %ymm0, (%rsi) # sched: [5:1.00]
+; SANDY-NEXT:    vmovaps %ymm0, (%rsi) # sched: [1:1.00]
 ; SANDY-NEXT:    retq # sched: [1:1.00]
 ;
 ; HASWELL-LABEL: test_movaps:
@@ -2753,7 +2753,7 @@ define i32 @test_movmskpd(<4 x double> %a0) {
 ; ZNVER1-LABEL: test_movmskpd:
 ; ZNVER1:       # %bb.0:
 ; ZNVER1-NEXT:    vmovmskpd %ymm0, %eax # sched: [1:1.00]
-; ZNVER1-NEXT:    vzeroupper # sched: [100:?]
+; ZNVER1-NEXT:    vzeroupper # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   %1 = call i32 @llvm.x86.avx.movmsk.pd.256(<4 x double> %a0)
   ret i32 %1
@@ -2805,7 +2805,7 @@ define i32 @test_movmskps(<8 x float> %a0) {
 ; ZNVER1-LABEL: test_movmskps:
 ; ZNVER1:       # %bb.0:
 ; ZNVER1-NEXT:    vmovmskps %ymm0, %eax # sched: [1:1.00]
-; ZNVER1-NEXT:    vzeroupper # sched: [100:?]
+; ZNVER1-NEXT:    vzeroupper # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   %1 = call i32 @llvm.x86.avx.movmsk.ps.256(<8 x float> %a0)
   ret i32 %1
@@ -2816,7 +2816,7 @@ define void @test_movntdq(<4 x i64> %a0, <4 x i64> *%a1) {
 ; GENERIC-LABEL: test_movntdq:
 ; GENERIC:       # %bb.0:
 ; GENERIC-NEXT:    #APP
-; GENERIC-NEXT:    vmovntdq %ymm0, (%rdi) # sched: [5:1.00]
+; GENERIC-NEXT:    vmovntdq %ymm0, (%rdi) # sched: [1:1.00]
 ; GENERIC-NEXT:    #NO_APP
 ; GENERIC-NEXT:    vzeroupper # sched: [100:0.33]
 ; GENERIC-NEXT:    retq # sched: [1:1.00]
@@ -2824,7 +2824,7 @@ define void @test_movntdq(<4 x i64> %a0, <4 x i64> *%a1) {
 ; SANDY-LABEL: test_movntdq:
 ; SANDY:       # %bb.0:
 ; SANDY-NEXT:    #APP
-; SANDY-NEXT:    vmovntdq %ymm0, (%rdi) # sched: [5:1.00]
+; SANDY-NEXT:    vmovntdq %ymm0, (%rdi) # sched: [1:1.00]
 ; SANDY-NEXT:    #NO_APP
 ; SANDY-NEXT:    vzeroupper # sched: [100:0.33]
 ; SANDY-NEXT:    retq # sched: [1:1.00]
@@ -2864,7 +2864,7 @@ define void @test_movntdq(<4 x i64> %a0, <4 x i64> *%a1) {
 ; BTVER2-LABEL: test_movntdq:
 ; BTVER2:       # %bb.0:
 ; BTVER2-NEXT:    #APP
-; BTVER2-NEXT:    vmovntdq %ymm0, (%rdi) # sched: [3:2.00]
+; BTVER2-NEXT:    vmovntdq %ymm0, (%rdi) # sched: [2:2.00]
 ; BTVER2-NEXT:    #NO_APP
 ; BTVER2-NEXT:    retq # sched: [4:1.00]
 ;
@@ -2873,7 +2873,7 @@ define void @test_movntdq(<4 x i64> %a0, <4 x i64> *%a1) {
 ; ZNVER1-NEXT:    #APP
 ; ZNVER1-NEXT:    vmovntdq %ymm0, (%rdi) # sched: [1:0.50]
 ; ZNVER1-NEXT:    #NO_APP
-; ZNVER1-NEXT:    vzeroupper # sched: [100:?]
+; ZNVER1-NEXT:    vzeroupper # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   call void asm sideeffect "vmovntdq $0, $1", "x,*m"(<4 x i64> %a0, <4 x i64> *%a1)
   ret void
@@ -2883,13 +2883,13 @@ define <4 x double> @test_movntpd(<4 x double> %a0, <4 x double> *%a1) {
 ; GENERIC-LABEL: test_movntpd:
 ; GENERIC:       # %bb.0:
 ; GENERIC-NEXT:    vaddpd %ymm0, %ymm0, %ymm0 # sched: [3:1.00]
-; GENERIC-NEXT:    vmovntpd %ymm0, (%rdi) # sched: [5:1.00]
+; GENERIC-NEXT:    vmovntpd %ymm0, (%rdi) # sched: [1:1.00]
 ; GENERIC-NEXT:    retq # sched: [1:1.00]
 ;
 ; SANDY-LABEL: test_movntpd:
 ; SANDY:       # %bb.0:
 ; SANDY-NEXT:    vaddpd %ymm0, %ymm0, %ymm0 # sched: [3:1.00]
-; SANDY-NEXT:    vmovntpd %ymm0, (%rdi) # sched: [5:1.00]
+; SANDY-NEXT:    vmovntpd %ymm0, (%rdi) # sched: [1:1.00]
 ; SANDY-NEXT:    retq # sched: [1:1.00]
 ;
 ; HASWELL-LABEL: test_movntpd:
@@ -2936,13 +2936,13 @@ define <8 x float> @test_movntps(<8 x float> %a0, <8 x float> *%a1) {
 ; GENERIC-LABEL: test_movntps:
 ; GENERIC:       # %bb.0:
 ; GENERIC-NEXT:    vaddps %ymm0, %ymm0, %ymm0 # sched: [3:1.00]
-; GENERIC-NEXT:    vmovntps %ymm0, (%rdi) # sched: [5:1.00]
+; GENERIC-NEXT:    vmovntps %ymm0, (%rdi) # sched: [1:1.00]
 ; GENERIC-NEXT:    retq # sched: [1:1.00]
 ;
 ; SANDY-LABEL: test_movntps:
 ; SANDY:       # %bb.0:
 ; SANDY-NEXT:    vaddps %ymm0, %ymm0, %ymm0 # sched: [3:1.00]
-; SANDY-NEXT:    vmovntps %ymm0, (%rdi) # sched: [5:1.00]
+; SANDY-NEXT:    vmovntps %ymm0, (%rdi) # sched: [1:1.00]
 ; SANDY-NEXT:    retq # sched: [1:1.00]
 ;
 ; HASWELL-LABEL: test_movntps:
@@ -3116,7 +3116,7 @@ define <4 x double> @test_movupd(<4 x double> *%a0, <4 x double> *%a1) {
 ; GENERIC:       # %bb.0:
 ; GENERIC-NEXT:    vmovupd (%rdi), %ymm0 # sched: [7:0.50]
 ; GENERIC-NEXT:    vaddpd %ymm0, %ymm0, %ymm0 # sched: [3:1.00]
-; GENERIC-NEXT:    vmovupd %ymm0, (%rsi) # sched: [5:1.00]
+; GENERIC-NEXT:    vmovupd %ymm0, (%rsi) # sched: [1:1.00]
 ; GENERIC-NEXT:    retq # sched: [1:1.00]
 ;
 ; SANDY-LABEL: test_movupd:
@@ -3124,8 +3124,8 @@ define <4 x double> @test_movupd(<4 x double> *%a0, <4 x double> *%a1) {
 ; SANDY-NEXT:    vmovups (%rdi), %xmm0 # sched: [6:0.50]
 ; SANDY-NEXT:    vinsertf128 $1, 16(%rdi), %ymm0, %ymm0 # sched: [7:0.50]
 ; SANDY-NEXT:    vaddpd %ymm0, %ymm0, %ymm0 # sched: [3:1.00]
-; SANDY-NEXT:    vextractf128 $1, %ymm0, 16(%rsi) # sched: [5:1.00]
-; SANDY-NEXT:    vmovupd %xmm0, (%rsi) # sched: [5:1.00]
+; SANDY-NEXT:    vextractf128 $1, %ymm0, 16(%rsi) # sched: [1:1.00]
+; SANDY-NEXT:    vmovupd %xmm0, (%rsi) # sched: [1:1.00]
 ; SANDY-NEXT:    retq # sched: [1:1.00]
 ;
 ; HASWELL-LABEL: test_movupd:
@@ -3180,7 +3180,7 @@ define <8 x float> @test_movups(<8 x float> *%a0, <8 x float> *%a1) {
 ; GENERIC:       # %bb.0:
 ; GENERIC-NEXT:    vmovups (%rdi), %ymm0 # sched: [7:0.50]
 ; GENERIC-NEXT:    vaddps %ymm0, %ymm0, %ymm0 # sched: [3:1.00]
-; GENERIC-NEXT:    vmovups %ymm0, (%rsi) # sched: [5:1.00]
+; GENERIC-NEXT:    vmovups %ymm0, (%rsi) # sched: [1:1.00]
 ; GENERIC-NEXT:    retq # sched: [1:1.00]
 ;
 ; SANDY-LABEL: test_movups:
@@ -3188,8 +3188,8 @@ define <8 x float> @test_movups(<8 x float> *%a0, <8 x float> *%a1) {
 ; SANDY-NEXT:    vmovups (%rdi), %xmm0 # sched: [6:0.50]
 ; SANDY-NEXT:    vinsertf128 $1, 16(%rdi), %ymm0, %ymm0 # sched: [7:0.50]
 ; SANDY-NEXT:    vaddps %ymm0, %ymm0, %ymm0 # sched: [3:1.00]
-; SANDY-NEXT:    vextractf128 $1, %ymm0, 16(%rsi) # sched: [5:1.00]
-; SANDY-NEXT:    vmovups %xmm0, (%rsi) # sched: [5:1.00]
+; SANDY-NEXT:    vextractf128 $1, %ymm0, 16(%rsi) # sched: [1:1.00]
+; SANDY-NEXT:    vmovups %xmm0, (%rsi) # sched: [1:1.00]
 ; SANDY-NEXT:    retq # sched: [1:1.00]
 ;
 ; HASWELL-LABEL: test_movups:
@@ -3533,8 +3533,8 @@ define <4 x double> @test_perm2f128(<4 x double> %a0, <4 x double> %a1, <4 x dou
 ;
 ; ZNVER1-LABEL: test_perm2f128:
 ; ZNVER1:       # %bb.0:
-; ZNVER1-NEXT:    vperm2f128 {{.*#+}} ymm1 = ymm0[2,3],ymm1[0,1] sched: [100:?]
-; ZNVER1-NEXT:    vperm2f128 {{.*#+}} ymm0 = ymm0[2,3],mem[0,1] sched: [100:?]
+; ZNVER1-NEXT:    vperm2f128 {{.*#+}} ymm1 = ymm0[2,3],ymm1[0,1] sched: [100:0.25]
+; ZNVER1-NEXT:    vperm2f128 {{.*#+}} ymm0 = ymm0[2,3],mem[0,1] sched: [100:0.25]
 ; ZNVER1-NEXT:    vaddpd %ymm0, %ymm1, %ymm0 # sched: [3:1.00]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   %1 = shufflevector <4 x double> %a0, <4 x double> %a1, <4 x i32> <i32 2, i32 3, i32 4, i32 5>
@@ -4450,7 +4450,7 @@ define <4 x double> @test_sqrtpd(<4 x double> %a0, <4 x double> *%a1) {
 ;
 ; ZNVER1-LABEL: test_sqrtpd:
 ; ZNVER1:       # %bb.0:
-; ZNVER1-NEXT:    vsqrtpd (%rdi), %ymm1 # sched: [47:47.00]
+; ZNVER1-NEXT:    vsqrtpd (%rdi), %ymm1 # sched: [47:40.00]
 ; ZNVER1-NEXT:    vsqrtpd %ymm0, %ymm0 # sched: [40:40.00]
 ; ZNVER1-NEXT:    vaddpd %ymm1, %ymm0, %ymm0 # sched: [3:1.00]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
@@ -4514,7 +4514,7 @@ define <8 x float> @test_sqrtps(<8 x float> %a0, <8 x float> *%a1) {
 ;
 ; ZNVER1-LABEL: test_sqrtps:
 ; ZNVER1:       # %bb.0:
-; ZNVER1-NEXT:    vsqrtps (%rdi), %ymm1 # sched: [35:35.00]
+; ZNVER1-NEXT:    vsqrtps (%rdi), %ymm1 # sched: [35:28.00]
 ; ZNVER1-NEXT:    vsqrtps %ymm0, %ymm0 # sched: [28:28.00]
 ; ZNVER1-NEXT:    vaddps %ymm1, %ymm0, %ymm0 # sched: [3:1.00]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
@@ -4691,11 +4691,11 @@ define i32 @test_testpd(<2 x double> %a0, <2 x double> %a1, <2 x double> *%a2) {
 ;
 ; BTVER2-LABEL: test_testpd:
 ; BTVER2:       # %bb.0:
-; BTVER2-NEXT:    xorl %eax, %eax # sched: [1:0.50]
+; BTVER2-NEXT:    xorl %eax, %eax # sched: [0:0.50]
 ; BTVER2-NEXT:    vtestpd %xmm1, %xmm0 # sched: [3:1.00]
 ; BTVER2-NEXT:    setb %al # sched: [1:0.50]
 ; BTVER2-NEXT:    vtestpd (%rdi), %xmm0 # sched: [8:1.00]
-; BTVER2-NEXT:    adcl $0, %eax # sched: [1:0.50]
+; BTVER2-NEXT:    adcl $0, %eax # sched: [1:1.00]
 ; BTVER2-NEXT:    retq # sched: [4:1.00]
 ;
 ; ZNVER1-LABEL: test_testpd:
@@ -4777,11 +4777,11 @@ define i32 @test_testpd_ymm(<4 x double> %a0, <4 x double> %a1, <4 x double> *%a
 ;
 ; BTVER2-LABEL: test_testpd_ymm:
 ; BTVER2:       # %bb.0:
-; BTVER2-NEXT:    xorl %eax, %eax # sched: [1:0.50]
+; BTVER2-NEXT:    xorl %eax, %eax # sched: [0:0.50]
 ; BTVER2-NEXT:    vtestpd %ymm1, %ymm0 # sched: [4:2.00]
 ; BTVER2-NEXT:    setb %al # sched: [1:0.50]
 ; BTVER2-NEXT:    vtestpd (%rdi), %ymm0 # sched: [9:2.00]
-; BTVER2-NEXT:    adcl $0, %eax # sched: [1:0.50]
+; BTVER2-NEXT:    adcl $0, %eax # sched: [1:1.00]
 ; BTVER2-NEXT:    retq # sched: [4:1.00]
 ;
 ; ZNVER1-LABEL: test_testpd_ymm:
@@ -4791,7 +4791,7 @@ define i32 @test_testpd_ymm(<4 x double> %a0, <4 x double> %a1, <4 x double> *%a
 ; ZNVER1-NEXT:    setb %al # sched: [1:0.25]
 ; ZNVER1-NEXT:    vtestpd (%rdi), %ymm0 # sched: [8:0.50]
 ; ZNVER1-NEXT:    adcl $0, %eax # sched: [1:0.25]
-; ZNVER1-NEXT:    vzeroupper # sched: [100:?]
+; ZNVER1-NEXT:    vzeroupper # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   %1 = call i32 @llvm.x86.avx.vtestc.pd.256(<4 x double> %a0, <4 x double> %a1)
   %2 = load <4 x double>, <4 x double> *%a2, align 32
@@ -4858,11 +4858,11 @@ define i32 @test_testps(<4 x float> %a0, <4 x float> %a1, <4 x float> *%a2) {
 ;
 ; BTVER2-LABEL: test_testps:
 ; BTVER2:       # %bb.0:
-; BTVER2-NEXT:    xorl %eax, %eax # sched: [1:0.50]
+; BTVER2-NEXT:    xorl %eax, %eax # sched: [0:0.50]
 ; BTVER2-NEXT:    vtestps %xmm1, %xmm0 # sched: [3:1.00]
 ; BTVER2-NEXT:    setb %al # sched: [1:0.50]
 ; BTVER2-NEXT:    vtestps (%rdi), %xmm0 # sched: [8:1.00]
-; BTVER2-NEXT:    adcl $0, %eax # sched: [1:0.50]
+; BTVER2-NEXT:    adcl $0, %eax # sched: [1:1.00]
 ; BTVER2-NEXT:    retq # sched: [4:1.00]
 ;
 ; ZNVER1-LABEL: test_testps:
@@ -4944,11 +4944,11 @@ define i32 @test_testps_ymm(<8 x float> %a0, <8 x float> %a1, <8 x float> *%a2) 
 ;
 ; BTVER2-LABEL: test_testps_ymm:
 ; BTVER2:       # %bb.0:
-; BTVER2-NEXT:    xorl %eax, %eax # sched: [1:0.50]
+; BTVER2-NEXT:    xorl %eax, %eax # sched: [0:0.50]
 ; BTVER2-NEXT:    vtestps %ymm1, %ymm0 # sched: [4:2.00]
 ; BTVER2-NEXT:    setb %al # sched: [1:0.50]
 ; BTVER2-NEXT:    vtestps (%rdi), %ymm0 # sched: [9:2.00]
-; BTVER2-NEXT:    adcl $0, %eax # sched: [1:0.50]
+; BTVER2-NEXT:    adcl $0, %eax # sched: [1:1.00]
 ; BTVER2-NEXT:    retq # sched: [4:1.00]
 ;
 ; ZNVER1-LABEL: test_testps_ymm:
@@ -4958,7 +4958,7 @@ define i32 @test_testps_ymm(<8 x float> %a0, <8 x float> %a1, <8 x float> *%a2) 
 ; ZNVER1-NEXT:    setb %al # sched: [1:0.25]
 ; ZNVER1-NEXT:    vtestps (%rdi), %ymm0 # sched: [8:0.50]
 ; ZNVER1-NEXT:    adcl $0, %eax # sched: [1:0.25]
-; ZNVER1-NEXT:    vzeroupper # sched: [100:?]
+; ZNVER1-NEXT:    vzeroupper # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   %1 = call i32 @llvm.x86.avx.vtestc.ps.256(<8 x float> %a0, <8 x float> %a1)
   %2 = load <8 x float>, <8 x float> *%a2, align 32
@@ -5369,12 +5369,12 @@ define void @test_zeroall() {
 ;
 ; BTVER2-LABEL: test_zeroall:
 ; BTVER2:       # %bb.0:
-; BTVER2-NEXT:    vzeroall # sched: [90:?]
+; BTVER2-NEXT:    vzeroall # sched: [90:36.50]
 ; BTVER2-NEXT:    retq # sched: [4:1.00]
 ;
 ; ZNVER1-LABEL: test_zeroall:
 ; ZNVER1:       # %bb.0:
-; ZNVER1-NEXT:    vzeroall # sched: [100:?]
+; ZNVER1-NEXT:    vzeroall # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   call void @llvm.x86.avx.vzeroall()
   ret void
@@ -5414,12 +5414,12 @@ define void @test_zeroupper() {
 ;
 ; BTVER2-LABEL: test_zeroupper:
 ; BTVER2:       # %bb.0:
-; BTVER2-NEXT:    vzeroupper # sched: [46:?]
+; BTVER2-NEXT:    vzeroupper # sched: [46:18.50]
 ; BTVER2-NEXT:    retq # sched: [4:1.00]
 ;
 ; ZNVER1-LABEL: test_zeroupper:
 ; ZNVER1:       # %bb.0:
-; ZNVER1-NEXT:    vzeroupper # sched: [100:?]
+; ZNVER1-NEXT:    vzeroupper # sched: [100:0.25]
 ; ZNVER1-NEXT:    retq # sched: [1:0.50]
   call void @llvm.x86.avx.vzeroupper()
   ret void

@@ -237,6 +237,7 @@ static bool Execute(ProcessInfo &PI, StringRef Program, const char **Args,
      return !MakeErrMsg(ErrMsg, "posix_spawn failed", Err);
 
     PI.Pid = PID;
+    PI.Process = PID;
 
     return true;
   }
@@ -300,6 +301,7 @@ static bool Execute(ProcessInfo &PI, StringRef Program, const char **Args,
   }
 
   PI.Pid = child;
+  PI.Process = child;
 
   return true;
 }
@@ -404,14 +406,14 @@ ProcessInfo sys::Wait(const ProcessInfo &PI, unsigned SecondsToWait,
   return WaitResult;
 }
 
-  std::error_code sys::ChangeStdinToBinary(){
+std::error_code sys::ChangeStdinToBinary() {
   // Do nothing, as Unix doesn't differentiate between text and binary.
-    return std::error_code();
+  return std::error_code();
 }
 
-  std::error_code sys::ChangeStdoutToBinary(){
+std::error_code sys::ChangeStdoutToBinary() {
   // Do nothing, as Unix doesn't differentiate between text and binary.
-    return std::error_code();
+  return std::error_code();
 }
 
 std::error_code
@@ -434,13 +436,24 @@ llvm::sys::writeFileWithEncoding(StringRef FileName, StringRef Contents,
 bool llvm::sys::commandLineFitsWithinSystemLimits(StringRef Program,
                                                   ArrayRef<const char *> Args) {
   static long ArgMax = sysconf(_SC_ARG_MAX);
+  // POSIX requires that _POSIX_ARG_MAX is 4096, which is the lowest possible
+  // value for ARG_MAX on a POSIX compliant system.
+  static long ArgMin = _POSIX_ARG_MAX;
+
+  // This the same baseline used by xargs.
+  long EffectiveArgMax = 128 * 1024;
+
+  if (EffectiveArgMax > ArgMax)
+    EffectiveArgMax = ArgMax;
+  else if (EffectiveArgMax < ArgMin)
+    EffectiveArgMax = ArgMin;
 
   // System says no practical limit.
   if (ArgMax == -1)
     return true;
 
   // Conservatively account for space required by environment variables.
-  long HalfArgMax = ArgMax / 2;
+  long HalfArgMax = EffectiveArgMax / 2;
 
   size_t ArgLength = Program.size() + 1;
   for (const char* Arg : Args) {

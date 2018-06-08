@@ -137,6 +137,7 @@ INITIALIZE_PASS_END(SpeculativeExecutionLegacyPass, "speculative-execution",
 void SpeculativeExecutionLegacyPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<TargetTransformInfoWrapperPass>();
   AU.addPreserved<GlobalsAAWrapperPass>();
+  AU.setPreservesCFG();
 }
 
 bool SpeculativeExecutionLegacyPass::runOnFunction(Function &F) {
@@ -151,8 +152,8 @@ namespace llvm {
 
 bool SpeculativeExecutionPass::runImpl(Function &F, TargetTransformInfo *TTI) {
   if (OnlyIfDivergentTarget && !TTI->hasBranchDivergence()) {
-    DEBUG(dbgs() << "Not running SpeculativeExecution because "
-                    "TTI->hasBranchDivergence() is false.\n");
+    LLVM_DEBUG(dbgs() << "Not running SpeculativeExecution because "
+                         "TTI->hasBranchDivergence() is false.\n");
     return false;
   }
 
@@ -314,6 +315,7 @@ PreservedAnalyses SpeculativeExecutionPass::run(Function &F,
     return PreservedAnalyses::all();
   PreservedAnalyses PA;
   PA.preserve<GlobalsAA>();
+  PA.preserveSet<CFGAnalyses>();
   return PA;
 }
 }  // namespace llvm

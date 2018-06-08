@@ -235,9 +235,17 @@ struct CodeGenProcModel {
   // List of Register Files.
   std::vector<CodeGenRegisterFile> RegisterFiles;
 
+  // Optional Retire Control Unit definition.
+  Record *RetireControlUnit;
+
+  // List of PfmCounters.
+  RecVec PfmIssueCounterDefs;
+  Record *PfmCycleCounterDef = nullptr;
+
   CodeGenProcModel(unsigned Idx, std::string Name, Record *MDef,
                    Record *IDef) :
-    Index(Idx), ModelName(std::move(Name)), ModelDef(MDef), ItinsDef(IDef) {}
+    Index(Idx), ModelName(std::move(Name)), ModelDef(MDef), ItinsDef(IDef),
+    RetireControlUnit(nullptr) {}
 
   bool hasItineraries() const {
     return !ItinsDef->getValueAsListOfDefs("IID").empty();
@@ -248,7 +256,9 @@ struct CodeGenProcModel {
   }
 
   bool hasExtraProcessorInfo() const {
-    return !RegisterFiles.empty();
+    return RetireControlUnit || !RegisterFiles.empty() ||
+        !PfmIssueCounterDefs.empty() ||
+        PfmCycleCounterDef != nullptr;
   }
 
   unsigned getProcResourceIdx(Record *PRDef) const;
@@ -374,11 +384,11 @@ public:
     return const_cast<CodeGenSchedRW&>(
       IsRead ? getSchedRead(Idx) : getSchedWrite(Idx));
   }
-  const CodeGenSchedRW &getSchedRW(Record*Def) const {
+  const CodeGenSchedRW &getSchedRW(Record *Def) const {
     return const_cast<CodeGenSchedModels&>(*this).getSchedRW(Def);
   }
 
-  unsigned getSchedRWIdx(Record *Def, bool IsRead) const;
+  unsigned getSchedRWIdx(const Record *Def, bool IsRead) const;
 
   // Return true if the given write record is referenced by a ReadAdvance.
   bool hasReadOfWrite(Record *WriteDef) const;
@@ -417,9 +427,6 @@ public:
 
   unsigned findOrInsertRW(ArrayRef<unsigned> Seq, bool IsRead);
 
-  unsigned findSchedClassIdx(Record *ItinClassDef, ArrayRef<unsigned> Writes,
-                             ArrayRef<unsigned> Reads) const;
-
   Record *findProcResUnits(Record *ProcResKind, const CodeGenProcModel &PM,
                            ArrayRef<SMLoc> Loc) const;
 
@@ -436,7 +443,13 @@ private:
 
   void collectSchedClasses();
 
+  void collectRetireControlUnits();
+
   void collectRegisterFiles();
+
+  void collectPfmCounters();
+
+  void collectOptionalProcessorInfo();
 
   std::string createSchedClassName(Record *ItinClassDef,
                                    ArrayRef<unsigned> OperWrites,

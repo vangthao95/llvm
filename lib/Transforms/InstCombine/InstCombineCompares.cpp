@@ -723,7 +723,7 @@ static Value *rewriteGEPAsOffset(Value *Start, Value *Base,
       }
 
       auto *Op = NewInsts[GEP->getOperand(0)];
-      if (isa<ConstantInt>(Op) && dyn_cast<ConstantInt>(Op)->isZero())
+      if (isa<ConstantInt>(Op) && cast<ConstantInt>(Op)->isZero())
         NewInsts[GEP] = Index;
       else
         NewInsts[GEP] = Builder.CreateNSWAdd(
@@ -2457,6 +2457,45 @@ Instruction *InstCombiner::foldICmpSelectConstant(ICmpInst &Cmp,
   return nullptr;
 }
 
+Instruction *InstCombiner::foldICmpBitCastConstant(ICmpInst &Cmp,
+                                                   BitCastInst *Bitcast,
+                                                   const APInt &C) {
+  // Folding: icmp <pred> iN X, C
+  //  where X = bitcast <M x iK> (shufflevector <M x iK> %vec, undef, SC)) to iN
+  //    and C is a splat of a K-bit pattern
+  //    and SC is a constant vector = <C', C', C', ..., C'>
+  // Into:
+  //   %E = extractelement <M x iK> %vec, i32 C'
+  //   icmp <pred> iK %E, trunc(C)
+  if (!Bitcast->getType()->isIntegerTy() ||
+      !Bitcast->getSrcTy()->isIntOrIntVectorTy())
+    return nullptr;
+
+  Value *BCIOp = Bitcast->getOperand(0);
+  Value *Vec = nullptr;     // 1st vector arg of the shufflevector
+  Constant *Mask = nullptr; // Mask arg of the shufflevector
+  if (match(BCIOp,
+            m_ShuffleVector(m_Value(Vec), m_Undef(), m_Constant(Mask)))) {
+    // Check whether every element of Mask is the same constant
+    if (auto *Elem = dyn_cast_or_null<ConstantInt>(Mask->getSplatValue())) {
+      auto *VecTy = cast<VectorType>(BCIOp->getType());
+      auto *EltTy = cast<IntegerType>(VecTy->getElementType());
+      auto Pred = Cmp.getPredicate();
+      if (C.isSplat(EltTy->getBitWidth())) {
+        // Fold the icmp based on the value of C
+        // If C is M copies of an iK sized bit pattern,
+        // then:
+        //   =>  %E = extractelement <N x iK> %vec, i32 Elem
+        //       icmp <pred> iK %SplatVal, <pattern>
+        Value *Extract = Builder.CreateExtractElement(Vec, Elem);
+        Value *NewC = ConstantInt::get(EltTy, C.trunc(EltTy->getBitWidth()));
+        return new ICmpInst(Pred, Extract, NewC);
+      }
+    }
+  }
+  return nullptr;
+}
+
 /// Try to fold integer comparisons with a constant operand: icmp Pred X, C
 /// where X is some kind of instruction.
 Instruction *InstCombiner::foldICmpInstWithConstant(ICmpInst &Cmp) {
@@ -2528,6 +2567,11 @@ Instruction *InstCombiner::foldICmpInstWithConstant(ICmpInst &Cmp) {
 
   if (auto *TI = dyn_cast<TruncInst>(Cmp.getOperand(0))) {
     if (Instruction *I = foldICmpTruncConstant(Cmp, TI, *C))
+      return I;
+  }
+
+  if (auto *BCI = dyn_cast<BitCastInst>(Cmp.getOperand(0))) {
+    if (Instruction *I = foldICmpBitCastConstant(Cmp, BCI, *C))
       return I;
   }
 
@@ -3624,7 +3668,7 @@ bool InstCombiner::OptimizeOverflowCheck(OverflowCheckFlavor OCF, Value *LHS,
   return false;
 }
 
-/// \brief Recognize and process idiom involving test for multiplication
+/// Recognize and process idiom involving test for multiplication
 /// overflow.
 ///
 /// The caller has matched a pattern of the form:
@@ -3922,7 +3966,7 @@ static bool swapMayExposeCSEOpportunities(const Value *Op0, const Value *Op1) {
   return GoodToSwap > 0;
 }
 
-/// \brief Check that one use is in the same block as the definition and all
+/// Check that one use is in the same block as the definition and all
 /// other uses are in blocks dominated by a given block.
 ///
 /// \param DI Definition
@@ -3967,7 +4011,7 @@ static bool isChainSelectCmpBranch(const SelectInst *SI) {
   return true;
 }
 
-/// \brief True when a select result is replaced by one of its operands
+/// True when a select result is replaced by one of its operands
 /// in select-icmp sequence. This will eventually result in the elimination
 /// of the select.
 ///

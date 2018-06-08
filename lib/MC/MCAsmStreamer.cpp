@@ -14,6 +14,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCCodeView.h"
 #include "llvm/MC/MCContext.h"
@@ -22,6 +23,7 @@
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstPrinter.h"
 #include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
@@ -31,6 +33,7 @@
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/TargetRegistry.h"
 #include <cctype>
 
 using namespace llvm;
@@ -42,12 +45,12 @@ class MCAsmStreamer final : public MCStreamer {
   formatted_raw_ostream &OS;
   const MCAsmInfo *MAI;
   std::unique_ptr<MCInstPrinter> InstPrinter;
-  std::unique_ptr<MCCodeEmitter> Emitter;
-  std::unique_ptr<MCAsmBackend> AsmBackend;
+  std::unique_ptr<MCAssembler> Assembler;
 
   SmallString<128> ExplicitCommentToEmit;
   SmallString<128> CommentToEmit;
   raw_svector_ostream CommentStream;
+  raw_null_ostream NullStream;
 
   unsigned IsVerboseAsm : 1;
   unsigned ShowInst : 1;
@@ -60,17 +63,23 @@ class MCAsmStreamer final : public MCStreamer {
 public:
   MCAsmStreamer(MCContext &Context, std::unique_ptr<formatted_raw_ostream> os,
                 bool isVerboseAsm, bool useDwarfDirectory,
-                MCInstPrinter *printer, MCCodeEmitter *emitter,
-                MCAsmBackend *asmbackend, bool showInst)
+                MCInstPrinter *printer, std::unique_ptr<MCCodeEmitter> emitter,
+                std::unique_ptr<MCAsmBackend> asmbackend, bool showInst)
       : MCStreamer(Context), OSOwner(std::move(os)), OS(*OSOwner),
-        MAI(Context.getAsmInfo()), InstPrinter(printer), Emitter(emitter),
-        AsmBackend(asmbackend), CommentStream(CommentToEmit),
-        IsVerboseAsm(isVerboseAsm), ShowInst(showInst),
-        UseDwarfDirectory(useDwarfDirectory) {
+        MAI(Context.getAsmInfo()), InstPrinter(printer),
+        Assembler(llvm::make_unique<MCAssembler>(
+            Context, std::move(asmbackend), std::move(emitter),
+            (asmbackend) ? asmbackend->createObjectWriter(NullStream)
+                         : nullptr)),
+        CommentStream(CommentToEmit), IsVerboseAsm(isVerboseAsm),
+        ShowInst(showInst), UseDwarfDirectory(useDwarfDirectory) {
     assert(InstPrinter);
     if (IsVerboseAsm)
         InstPrinter->setCommentStream(CommentStream);
   }
+
+  MCAssembler &getAssembler() { return *Assembler; }
+  MCAssembler *getAssemblerPtr() override { return nullptr; }
 
   inline void EmitEOL() {
     // Dump Explicit Comments here.
@@ -295,6 +304,9 @@ public:
                         SMLoc Loc) override;
   void EmitWinEHHandlerData(SMLoc Loc) override;
 
+  void emitCGProfileEntry(const MCSymbolRefExpr *From,
+                          const MCSymbolRefExpr *To, uint64_t Count) override;
+
   void EmitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI,
                        bool PrintSchedInfo) override;
 
@@ -303,7 +315,8 @@ public:
   void EmitBundleUnlock() override;
 
   bool EmitRelocDirective(const MCExpr &Offset, StringRef Name,
-                          const MCExpr *Expr, SMLoc Loc) override;
+                          const MCExpr *Expr, SMLoc Loc,
+                          const MCSubtargetInfo &STI) override;
 
   /// If this file is backed by an assembly streamer, this dumps the specified
   /// string in the output .s file. This capability is indicated by the
@@ -536,12 +549,19 @@ void MCAsmStreamer::EmitThumbFunc(MCSymbol *Func) {
 }
 
 void MCAsmStreamer::EmitAssignment(MCSymbol *Symbol, const MCExpr *Value) {
-  OS << ".set ";
-  Symbol->print(OS, MAI);
-  OS << ", ";
-  Value->print(OS, MAI);
+  // Do not emit a .set on inlined target assignments.
+  bool EmitSet = true;
+  if (auto *E = dyn_cast<MCTargetExpr>(Value))
+    if (E->inlineAssignedExpr())
+      EmitSet = false;
+  if (EmitSet) {
+    OS << ".set ";
+    Symbol->print(OS, MAI);
+    OS << ", ";
+    Value->print(OS, MAI);
 
-  EmitEOL();
+    EmitEOL();
+  }
 
   MCStreamer::EmitAssignment(Symbol, Value);
 }
@@ -1106,10 +1126,8 @@ static void printDwarfFileDirective(unsigned FileNo, StringRef Directory,
     OS << ' ';
   }
   PrintQuotedString(Filename, OS);
-  if (Checksum) {
-    OS << " md5 ";
-    PrintQuotedString(Checksum->digest(), OS);
-  }
+  if (Checksum)
+    OS << " md5 0x" << Checksum->digest();
   if (Source) {
     OS << " source ";
     PrintQuotedString(*Source, OS);
@@ -1171,27 +1189,29 @@ void MCAsmStreamer::EmitDwarfLocDirective(unsigned FileNo, unsigned Line,
                                           unsigned Discriminator,
                                           StringRef FileName) {
   OS << "\t.loc\t" << FileNo << " " << Line << " " << Column;
-  if (Flags & DWARF2_FLAG_BASIC_BLOCK)
-    OS << " basic_block";
-  if (Flags & DWARF2_FLAG_PROLOGUE_END)
-    OS << " prologue_end";
-  if (Flags & DWARF2_FLAG_EPILOGUE_BEGIN)
-    OS << " epilogue_begin";
+  if (MAI->supportsExtendedDwarfLocDirective()) {
+    if (Flags & DWARF2_FLAG_BASIC_BLOCK)
+      OS << " basic_block";
+    if (Flags & DWARF2_FLAG_PROLOGUE_END)
+      OS << " prologue_end";
+    if (Flags & DWARF2_FLAG_EPILOGUE_BEGIN)
+      OS << " epilogue_begin";
 
-  unsigned OldFlags = getContext().getCurrentDwarfLoc().getFlags();
-  if ((Flags & DWARF2_FLAG_IS_STMT) != (OldFlags & DWARF2_FLAG_IS_STMT)) {
-    OS << " is_stmt ";
+    unsigned OldFlags = getContext().getCurrentDwarfLoc().getFlags();
+    if ((Flags & DWARF2_FLAG_IS_STMT) != (OldFlags & DWARF2_FLAG_IS_STMT)) {
+      OS << " is_stmt ";
 
-    if (Flags & DWARF2_FLAG_IS_STMT)
-      OS << "1";
-    else
-      OS << "0";
+      if (Flags & DWARF2_FLAG_IS_STMT)
+        OS << "1";
+      else
+        OS << "0";
+    }
+
+    if (Isa)
+      OS << " isa " << Isa;
+    if (Discriminator)
+      OS << " discriminator " << Discriminator;
   }
-
-  if (Isa)
-    OS << " isa " << Isa;
-  if (Discriminator)
-    OS << " discriminator " << Discriminator;
 
   if (IsVerboseAsm) {
     OS.PadToColumn(MAI->getCommentColumn());
@@ -1641,6 +1661,17 @@ void MCAsmStreamer::EmitWinCFIEndProlog(SMLoc Loc) {
   EmitEOL();
 }
 
+void MCAsmStreamer::emitCGProfileEntry(const MCSymbolRefExpr *From,
+                                       const MCSymbolRefExpr *To,
+                                       uint64_t Count) {
+  OS << "\t.cg_profile ";
+  From->getSymbol().print(OS, MAI);
+  OS << ", ";
+  To->getSymbol().print(OS, MAI);
+  OS << ", " << Count;
+  EmitEOL();
+}
+
 void MCAsmStreamer::AddEncodingComment(const MCInst &Inst,
                                        const MCSubtargetInfo &STI,
                                        bool PrintSchedInfo) {
@@ -1648,7 +1679,12 @@ void MCAsmStreamer::AddEncodingComment(const MCInst &Inst,
   SmallString<256> Code;
   SmallVector<MCFixup, 4> Fixups;
   raw_svector_ostream VecOS(Code);
-  Emitter->encodeInstruction(Inst, VecOS, Fixups, STI);
+
+  // If we have no code emitter, don't emit code.
+  if (!getAssembler().getEmitterPtr())
+    return;
+
+  getAssembler().getEmitter().encodeInstruction(Inst, VecOS, Fixups, STI);
 
   // If we are showing fixups, create symbolic markers in the encoded
   // representation. We do this by making a per-bit map to the fixup item index,
@@ -1660,7 +1696,8 @@ void MCAsmStreamer::AddEncodingComment(const MCInst &Inst,
 
   for (unsigned i = 0, e = Fixups.size(); i != e; ++i) {
     MCFixup &F = Fixups[i];
-    const MCFixupKindInfo &Info = AsmBackend->getFixupKindInfo(F.getKind());
+    const MCFixupKindInfo &Info =
+        getAssembler().getBackend().getFixupKindInfo(F.getKind());
     for (unsigned j = 0; j != Info.TargetSize; ++j) {
       unsigned Index = F.getOffset() * 8 + Info.TargetOffset + j;
       assert(Index < Code.size() * 8 && "Invalid offset in fixup!");
@@ -1724,7 +1761,8 @@ void MCAsmStreamer::AddEncodingComment(const MCInst &Inst,
 
   for (unsigned i = 0, e = Fixups.size(); i != e; ++i) {
     MCFixup &F = Fixups[i];
-    const MCFixupKindInfo &Info = AsmBackend->getFixupKindInfo(F.getKind());
+    const MCFixupKindInfo &Info =
+        getAssembler().getBackend().getFixupKindInfo(F.getKind());
     OS << "  fixup " << char('A' + i) << " - " << "offset: " << F.getOffset()
        << ", value: " << *F.getValue() << ", kind: " << Info.Name << "\n";
   }
@@ -1737,8 +1775,7 @@ void MCAsmStreamer::EmitInstruction(const MCInst &Inst,
          "Cannot emit contents before setting section!");
 
   // Show the encoding in a comment if we have a code emitter.
-  if (Emitter)
-    AddEncodingComment(Inst, STI, PrintSchedInfo);
+  AddEncodingComment(Inst, STI, PrintSchedInfo);
 
   // Show the MCInst if enabled.
   if (ShowInst) {
@@ -1784,7 +1821,8 @@ void MCAsmStreamer::EmitBundleUnlock() {
 }
 
 bool MCAsmStreamer::EmitRelocDirective(const MCExpr &Offset, StringRef Name,
-                                       const MCExpr *Expr, SMLoc) {
+                                       const MCExpr *Expr, SMLoc,
+                                       const MCSubtargetInfo &STI) {
   OS << "\t.reloc ";
   Offset.print(OS, MAI);
   OS << ", " << Name;
@@ -1827,8 +1865,11 @@ void MCAsmStreamer::FinishImpl() {
 MCStreamer *llvm::createAsmStreamer(MCContext &Context,
                                     std::unique_ptr<formatted_raw_ostream> OS,
                                     bool isVerboseAsm, bool useDwarfDirectory,
-                                    MCInstPrinter *IP, MCCodeEmitter *CE,
-                                    MCAsmBackend *MAB, bool ShowInst) {
+                                    MCInstPrinter *IP,
+                                    std::unique_ptr<MCCodeEmitter> &&CE,
+                                    std::unique_ptr<MCAsmBackend> &&MAB,
+                                    bool ShowInst) {
   return new MCAsmStreamer(Context, std::move(OS), isVerboseAsm,
-                           useDwarfDirectory, IP, CE, MAB, ShowInst);
+                           useDwarfDirectory, IP, std::move(CE), std::move(MAB),
+                           ShowInst);
 }
