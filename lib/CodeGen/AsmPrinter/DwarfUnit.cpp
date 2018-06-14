@@ -594,8 +594,6 @@ DIE *DwarfUnit::getOrCreateContextDIE(const DIScope *Context) {
     return &getUnitDie();
   if (auto *T = dyn_cast<DIType>(Context))
     return getOrCreateTypeDIE(T);
-  if (auto *CB = dyn_cast<DICommonBlock>(Context))
-    return getOrCreateCommonBlock(CB);
   if (auto *NS = dyn_cast<DINamespace>(Context))
     return getOrCreateNameSpace(NS);
   if (auto *SP = dyn_cast<DISubprogram>(Context))
@@ -1085,27 +1083,6 @@ DIE *DwarfUnit::getOrCreateNameSpace(const DINamespace *NS) {
   addGlobalName(Name, NDie, NS->getScope());
   if (NS->getExportSymbols())
     addFlag(NDie, dwarf::DW_AT_export_symbols);
-  return &NDie;
-}
-
-DIE *DwarfUnit::getOrCreateCommonBlock(const DICommonBlock *CB) {
-  // Construct the context before querying for the existence of the DIE in case
-  // such construction creates the DIE.
-  DIE *ContextDIE = getOrCreateContextDIE(CB->getScope());
-
-  if (DIE *NDie = getDIE(CB))
-    return NDie;
-  DIE &NDie = createAndAddDIE(dwarf::DW_TAG_common_block, *ContextDIE, CB);
-  StringRef Name = CB->getName().empty() ? "_BLNK_" : CB->getName();
-  addString(NDie, dwarf::DW_AT_name, Name);
-  addGlobalName(Name, NDie, CB->getScope());
-  if (CB->getFile())
-    addSourceLine(NDie, CB->getLineNo(), CB->getFile()->getFilename(),
-                  CB->getFile()->getDirectory());
-  if (uint32_t AlignInBits = CB->getAlignInBits()) {
-    uint32_t AlignInBytes = AlignInBits >> 3;
-    addUInt(NDie, dwarf::DW_AT_alignment, dwarf::DW_FORM_udata, AlignInBytes);
-  }
   return &NDie;
 }
 
