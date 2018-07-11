@@ -317,6 +317,8 @@ DwarfDebug::DwarfDebug(AsmPrinter *A, Module *M)
   else
     UseInlineStrings = DwarfInlinedStrings == Enable;
 
+  UseLocSection = !TT.isNVPTX();
+
   HasAppleExtensionAttributes = tuneForLLDB();
 
   // Handle split DWARF.
@@ -1275,6 +1277,9 @@ void DwarfDebug::collectVariableInfo(DwarfCompileUnit &TheCU,
       RegVar->initializeDbgValue(MInsn);
       continue;
     }
+    // Do not emit location lists if .debug_loc secton is disabled.
+    if (!useLocSection())
+      continue;
 
     // Handle multiple DBG_VALUE instructions describing one variable.
     DebugLocStream::ListBuilder List(DebugLocs, TheCU, *Asm, *RegVar, *MInsn);
@@ -1784,7 +1789,6 @@ void DwarfDebug::emitDebugLocEntry(ByteStreamer &Streamer,
 }
 
 static void emitDebugLocValue(const AsmPrinter &AP, const DIBasicType *BT,
-                              ByteStreamer &Streamer,
                               const DebugLocEntry::Value &Value,
                               DwarfExpression &DwarfExpr) {
   auto *DIExpr = Value.getExpression();
@@ -1829,11 +1833,11 @@ void DebugLocEntry::finalize(const AsmPrinter &AP,
            "fragments are expected to be sorted");
 
     for (auto Fragment : Values)
-      emitDebugLocValue(AP, BT, Streamer, Fragment, DwarfExpr);
+      emitDebugLocValue(AP, BT, Fragment, DwarfExpr);
 
   } else {
     assert(Values.size() == 1 && "only fragments may have >1 value");
-    emitDebugLocValue(AP, BT, Streamer, Value, DwarfExpr);
+    emitDebugLocValue(AP, BT, Value, DwarfExpr);
   }
   DwarfExpr.finalize();
 }
@@ -2076,6 +2080,63 @@ void DwarfDebug::emitDebugARanges() {
   }
 }
 
+/// Emit a single range list.
+static void emitRangeList(AsmPrinter *Asm, DwarfCompileUnit *CU,
+                          const RangeSpanList &List) {
+  // Emit our symbol so we can find the beginning of the range.
+  Asm->OutStreamer->EmitLabel(List.getSym());
+  // Gather all the ranges that apply to the same section so they can share
+  // a base address entry.
+  MapVector<const MCSection *, std::vector<const RangeSpan *>> SectionRanges;
+  // Size for our labels.
+  auto Size = Asm->MAI->getCodePointerSize();
+
+  for (const RangeSpan &Range : List.getRanges())
+    SectionRanges[&Range.getStart()->getSection()].push_back(&Range);
+
+  auto *CUBase = CU->getBaseAddress();
+  bool BaseIsSet = false;
+  for (const auto &P : SectionRanges) {
+    // Don't bother with a base address entry if there's only one range in
+    // this section in this range list - for example ranges for a CU will
+    // usually consist of single regions from each of many sections
+    // (-ffunction-sections, or just C++ inline functions) except under LTO
+    // or optnone where there may be holes in a single CU's section
+    // contrubutions.
+    auto *Base = CUBase;
+    if (!Base && P.second.size() > 1 && UseDwarfRangesBaseAddressSpecifier) {
+      BaseIsSet = true;
+      // FIXME/use care: This may not be a useful base address if it's not
+      // the lowest address/range in this object.
+      Base = P.second.front()->getStart();
+      Asm->OutStreamer->EmitIntValue(-1, Size);
+      Asm->OutStreamer->EmitSymbolValue(Base, Size);
+    } else if (BaseIsSet) {
+      BaseIsSet = false;
+      Asm->OutStreamer->EmitIntValue(-1, Size);
+      Asm->OutStreamer->EmitIntValue(0, Size);
+    }
+
+    for (const auto *RS : P.second) {
+      const MCSymbol *Begin = RS->getStart();
+      const MCSymbol *End = RS->getEnd();
+      assert(Begin && "Range without a begin symbol?");
+      assert(End && "Range without an end symbol?");
+      if (Base) {
+        Asm->EmitLabelDifference(Begin, Base, Size);
+        Asm->EmitLabelDifference(End, Base, Size);
+      } else {
+        Asm->OutStreamer->EmitSymbolValue(Begin, Size);
+        Asm->OutStreamer->EmitSymbolValue(End, Size);
+      }
+    }
+  }
+
+  // And terminate the list with two 0 values.
+  Asm->OutStreamer->EmitIntValue(0, Size);
+  Asm->OutStreamer->EmitIntValue(0, Size);
+}
+
 /// Emit address ranges into a debug ranges section.
 void DwarfDebug::emitDebugRanges() {
   if (CUMap.empty())
@@ -2095,9 +2156,6 @@ void DwarfDebug::emitDebugRanges() {
   Asm->OutStreamer->SwitchSection(
       Asm->getObjFileLowering().getDwarfRangesSection());
 
-  // Size for our labels.
-  unsigned char Size = Asm->MAI->getCodePointerSize();
-
   // Grab the specific ranges for the compile units in the module.
   for (const auto &I : CUMap) {
     DwarfCompileUnit *TheCU = I.second;
@@ -2106,60 +2164,8 @@ void DwarfDebug::emitDebugRanges() {
       TheCU = Skel;
 
     // Iterate over the misc ranges for the compile units in the module.
-    for (const RangeSpanList &List : TheCU->getRangeLists()) {
-      // Emit our symbol so we can find the beginning of the range.
-      Asm->OutStreamer->EmitLabel(List.getSym());
-
-      // Gather all the ranges that apply to the same section so they can share
-      // a base address entry.
-      MapVector<const MCSection *, std::vector<const RangeSpan *>> MV;
-      for (const RangeSpan &Range : List.getRanges()) {
-        MV[&Range.getStart()->getSection()].push_back(&Range);
-      }
-
-      auto *CUBase = TheCU->getBaseAddress();
-      bool BaseIsSet = false;
-      for (const auto &P : MV) {
-        // Don't bother with a base address entry if there's only one range in
-        // this section in this range list - for example ranges for a CU will
-        // usually consist of single regions from each of many sections
-        // (-ffunction-sections, or just C++ inline functions) except under LTO
-        // or optnone where there may be holes in a single CU's section
-        // contrubutions.
-        auto *Base = CUBase;
-        if (!Base && P.second.size() > 1 &&
-            UseDwarfRangesBaseAddressSpecifier) {
-          BaseIsSet = true;
-          // FIXME/use care: This may not be a useful base address if it's not
-          // the lowest address/range in this object.
-          Base = P.second.front()->getStart();
-          Asm->OutStreamer->EmitIntValue(-1, Size);
-          Asm->OutStreamer->EmitSymbolValue(Base, Size);
-        } else if (BaseIsSet) {
-          BaseIsSet = false;
-          Asm->OutStreamer->EmitIntValue(-1, Size);
-          Asm->OutStreamer->EmitIntValue(0, Size);
-        }
-
-        for (const auto *RS : P.second) {
-          const MCSymbol *Begin = RS->getStart();
-          const MCSymbol *End = RS->getEnd();
-          assert(Begin && "Range without a begin symbol?");
-          assert(End && "Range without an end symbol?");
-          if (Base) {
-            Asm->EmitLabelDifference(Begin, Base, Size);
-            Asm->EmitLabelDifference(End, Base, Size);
-          } else {
-            Asm->OutStreamer->EmitSymbolValue(Begin, Size);
-            Asm->OutStreamer->EmitSymbolValue(End, Size);
-          }
-        }
-      }
-
-      // And terminate the list with two 0 values.
-      Asm->OutStreamer->EmitIntValue(0, Size);
-      Asm->OutStreamer->EmitIntValue(0, Size);
-    }
+    for (const RangeSpanList &List : TheCU->getRangeLists())
+      emitRangeList(Asm, TheCU, List);
   }
 }
 
