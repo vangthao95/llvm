@@ -787,13 +787,9 @@ bool DIExpression::isValid() const {
     case dwarf::DW_OP_shra:
     case dwarf::DW_OP_deref:
     case dwarf::DW_OP_xderef:
-<<<<<<< HEAD
-    case dwarf::DW_OP_deref_size:
-=======
     case dwarf::DW_OP_lit0:
     case dwarf::DW_OP_not:
     case dwarf::DW_OP_dup:
->>>>>>> 99a2c222c24aee6f7d84f9e8422c6ccdb91972dd
       break;
     }
   }
