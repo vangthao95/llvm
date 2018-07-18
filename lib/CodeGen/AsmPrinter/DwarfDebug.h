@@ -278,6 +278,9 @@ class DwarfDebug : public DebugHandlerBase {
   /// temp symbols inside DWARF sections.
   bool UseSectionsAsReferences = false;
 
+  ///Allow emission of the .debug_loc section.
+  bool UseLocSection = true;
+
   /// DWARF5 Experimental Options
   /// @{
   AccelTableKind TheAccelTableKind;
@@ -543,7 +546,7 @@ public:
   /// Returns whether to use inline strings.
   bool useInlineStrings() const { return UseInlineStrings; }
 
-  /// Returns whether GNU oub sections should be emitted.
+  /// Returns whether GNU pub sections should be emitted.
   bool usePubSections() const { return UsePubSections; }
 
   /// Returns whether ranges section should be emitted.
@@ -553,6 +556,9 @@ public:
   bool useSectionsAsReferences() const {
     return UseSectionsAsReferences;
   }
+
+  /// Returns whether .debug_loc section should be emitted.
+  bool useLocSection() const { return UseLocSection; }
 
   // Experimental DWARF5 features.
 

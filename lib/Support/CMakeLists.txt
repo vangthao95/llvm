@@ -83,6 +83,7 @@ add_llvm_library(LLVMSupport
   IntEqClasses.cpp
   IntervalMap.cpp
   JamCRC.cpp
+  JSON.cpp
   KnownBits.cpp
   LEB128.cpp
   LineIterator.cpp
@@ -124,6 +125,7 @@ add_llvm_library(LLVMSupport
   Twine.cpp
   Unicode.cpp
   UnicodeCaseFold.cpp
+  VersionTuple.cpp
   WithColor.cpp
   YAMLParser.cpp
   YAMLTraits.cpp
