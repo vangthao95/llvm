@@ -2058,7 +2058,7 @@ void DebugLocEntry::finalize(const AsmPrinter &AP,
   assert(!Value.isFragment());
   assert(Values.size() == 1 && "only fragments may have >1 value");
   Value.Expression = ST->getStringLengthExp();
-  emitDebugLocValue(AP, nullptr, Streamer, Value, DwarfExpr);
+  emitDebugLocValue(AP, nullptr, Value, DwarfExpr);
   DwarfExpr.finalize();
 }
 

@@ -223,8 +223,7 @@ DIE *DwarfCompileUnit::getOrCreateCommonBlock(
   addString(NDie, dwarf::DW_AT_name, Name);
   addGlobalName(Name, NDie, CB->getScope());
   if (CB->getFile())
-    addSourceLine(NDie, CB->getLineNo(), CB->getFile()->getFilename(),
-                  CB->getFile()->getDirectory());
+    addSourceLine(NDie, CB->getLineNo(), CB->getFile());
   if (DIGlobalVariable *V = CB->getDecl())
     getCU().addLocationAttribute(&NDie, V, GlobalExprs);
   if (uint32_t AlignInBits = CB->getAlignInBits()) {
