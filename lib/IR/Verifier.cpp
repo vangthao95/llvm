@@ -886,6 +886,14 @@ void Verifier::visitDISubrange(const DISubrange &N) {
            "invalid subrange count", &N);
 }
 
+void Verifier::visitDIFortranSubrange(const DIFortranSubrange &N) {
+  AssertDI(N.getTag() == dwarf::DW_TAG_subrange_type, "invalid tag", &N);
+  AssertDI(N.getLowerBound() ? (N.getLowerBoundExp() != nullptr) : true,
+           "no lower bound", &N);
+  AssertDI(N.getUpperBound() ? (N.getUpperBoundExp() != nullptr) : true,
+           "no upper bound", &N);
+}
+
 void Verifier::visitDIEnumerator(const DIEnumerator &N) {
   AssertDI(N.getTag() == dwarf::DW_TAG_enumerator, "invalid tag", &N);
 }
@@ -897,6 +905,11 @@ void Verifier::visitDIBasicType(const DIBasicType &N) {
            "invalid tag", &N);
   AssertDI(!(N.isBigEndian() && N.isLittleEndian()) ,
             "has conflicting flags", &N);
+}
+
+void Verifier::visitDIStringType(const DIStringType &N) {
+  AssertDI( N.getTag() == dwarf::DW_TAG_string_type,
+           "invalid tag", &N);
 }
 
 void Verifier::visitDIDerivedType(const DIDerivedType &N) {
@@ -993,6 +1006,22 @@ void Verifier::visitDICompositeType(const DICompositeType &N) {
     AssertDI(isa<DIDerivedType>(D) && N.getTag() == dwarf::DW_TAG_variant_part,
              "discriminator can only appear on variant part");
   }
+}
+
+void Verifier::visitDIFortranArrayType(const DIFortranArrayType &N) {
+  // Common scope checks.
+  visitDIScope(N);
+
+  AssertDI(N.getTag() == dwarf::DW_TAG_array_type, "invalid tag", &N);
+
+  AssertDI(isScope(N.getRawScope()), "invalid scope", &N, N.getRawScope());
+  AssertDI(isType(N.getRawBaseType()), "invalid base type", &N,
+           N.getRawBaseType());
+
+  AssertDI(!N.getRawElements() || isa<MDTuple>(N.getRawElements()),
+           "invalid composite elements", &N, N.getRawElements());
+  AssertDI(!hasConflictingReferenceFlags(N.getFlags()),
+           "invalid reference flags", &N);
 }
 
 void Verifier::visitDISubroutineType(const DISubroutineType &N) {
