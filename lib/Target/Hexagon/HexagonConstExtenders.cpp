@@ -731,8 +731,7 @@ bool HCE::ExtRoot::operator< (const HCE::ExtRoot &ER) const {
     case MachineOperand::MO_ExternalSymbol:
       return StringRef(V.SymbolName) < StringRef(ER.V.SymbolName);
     case MachineOperand::MO_GlobalAddress:
-      assert(V.GV->hasName() && ER.V.GV->hasName());
-      return V.GV->getName() < ER.V.GV->getName();
+      return V.GV->getGUID() < ER.V.GV->getGUID();
     case MachineOperand::MO_BlockAddress: {
       const BasicBlock *ThisB = V.BA->getBasicBlock();
       const BasicBlock *OtherB = ER.V.BA->getBasicBlock();
@@ -1209,6 +1208,12 @@ void HCE::recordExtender(MachineInstr &MI, unsigned OpNum) {
   }
 
   ED.UseMI = &MI;
+
+  // Ignore unnamed globals.
+  ExtRoot ER(ED.getOp());
+  if (ER.Kind == MachineOperand::MO_GlobalAddress)
+    if (ER.V.GV->getName().empty())
+      return;
   Extenders.push_back(ED);
 }
 
@@ -1617,7 +1622,7 @@ bool HCE::replaceInstrExact(const ExtDesc &ED, Register ExtR) {
       else
         MIB.add(MachineOperand(ExtR));
     }
-    MIB.setMemRefs(MI.memoperands_begin(), MI.memoperands_end());
+    MIB.cloneMemRefs(MI);
     MBB.erase(MI);
     return true;
   }
@@ -1668,7 +1673,7 @@ bool HCE::replaceInstrExact(const ExtDesc &ED, Register ExtR) {
     // Add the stored value for stores.
     if (MI.mayStore())
       MIB.add(getStoredValueOp(MI));
-    MIB.setMemRefs(MI.memoperands_begin(), MI.memoperands_end());
+    MIB.cloneMemRefs(MI);
     MBB.erase(MI);
     return true;
   }
@@ -1785,7 +1790,7 @@ bool HCE::replaceInstrExpr(const ExtDesc &ED, const ExtenderInit &ExtI,
     // Add the stored value for stores.
     if (MI.mayStore())
       MIB.add(getStoredValueOp(MI));
-    MIB.setMemRefs(MI.memoperands_begin(), MI.memoperands_end());
+    MIB.cloneMemRefs(MI);
     MBB.erase(MI);
     return true;
   }

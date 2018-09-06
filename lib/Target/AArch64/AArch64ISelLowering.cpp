@@ -1086,6 +1086,7 @@ const char *AArch64TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case AArch64ISD::FIRST_NUMBER:      break;
   case AArch64ISD::CALL:              return "AArch64ISD::CALL";
   case AArch64ISD::ADRP:              return "AArch64ISD::ADRP";
+  case AArch64ISD::ADR:               return "AArch64ISD::ADR";
   case AArch64ISD::ADDlow:            return "AArch64ISD::ADDlow";
   case AArch64ISD::LOADgot:           return "AArch64ISD::LOADgot";
   case AArch64ISD::RET_FLAG:          return "AArch64ISD::RET_FLAG";
@@ -3912,13 +3913,21 @@ SDValue AArch64TargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG,
   return DAG.getNode(AArch64ISD::ADDlow, DL, Ty, ADRP, Lo);
 }
 
+// (adr sym)
+template <class NodeTy>
+SDValue AArch64TargetLowering::getAddrTiny(NodeTy *N, SelectionDAG &DAG,
+                                           unsigned Flags) const {
+  LLVM_DEBUG(dbgs() << "AArch64TargetLowering::getAddrTiny\n");
+  SDLoc DL(N);
+  EVT Ty = getPointerTy(DAG.getDataLayout());
+  SDValue Sym = getTargetNode(N, Ty, DAG, Flags);
+  return DAG.getNode(AArch64ISD::ADR, DL, Ty, Sym);
+}
+
 SDValue AArch64TargetLowering::LowerGlobalAddress(SDValue Op,
                                                   SelectionDAG &DAG) const {
   GlobalAddressSDNode *GN = cast<GlobalAddressSDNode>(Op);
   const GlobalValue *GV = GN->getGlobal();
-  const AArch64II::TOF TargetFlags =
-      (GV->hasDLLImportStorageClass() ? AArch64II::MO_DLLIMPORT
-                                      : AArch64II::MO_NO_FLAG);
   unsigned char OpFlags =
       Subtarget->ClassifyGlobalReference(GV, getTargetMachine());
 
@@ -3926,20 +3935,23 @@ SDValue AArch64TargetLowering::LowerGlobalAddress(SDValue Op,
     assert(cast<GlobalAddressSDNode>(Op)->getOffset() == 0 &&
            "unexpected offset in global node");
 
-  // This also catches the large code model case for Darwin.
+  // This also catches the large code model case for Darwin, and tiny code
+  // model with got relocations.
   if ((OpFlags & AArch64II::MO_GOT) != 0) {
-    return getGOT(GN, DAG, TargetFlags);
+    return getGOT(GN, DAG, OpFlags);
   }
 
   SDValue Result;
   if (getTargetMachine().getCodeModel() == CodeModel::Large) {
-    Result = getAddrLarge(GN, DAG, TargetFlags);
+    Result = getAddrLarge(GN, DAG, OpFlags);
+  } else if (getTargetMachine().getCodeModel() == CodeModel::Tiny) {
+    Result = getAddrTiny(GN, DAG, OpFlags);
   } else {
-    Result = getAddr(GN, DAG, TargetFlags);
+    Result = getAddr(GN, DAG, OpFlags);
   }
   EVT PtrVT = getPointerTy(DAG.getDataLayout());
   SDLoc DL(GN);
-  if (GV->hasDLLImportStorageClass())
+  if (OpFlags & (AArch64II::MO_DLLIMPORT | AArch64II::MO_COFFSTUB))
     Result = DAG.getLoad(PtrVT, DL, DAG.getEntryNode(), Result,
                          MachinePointerInfo::getGOT(DAG.getMachineFunction()));
   return Result;
@@ -4055,13 +4067,15 @@ SDValue
 AArch64TargetLowering::LowerELFGlobalTLSAddress(SDValue Op,
                                                 SelectionDAG &DAG) const {
   assert(Subtarget->isTargetELF() && "This function expects an ELF target");
-  assert(Subtarget->useSmallAddressing() &&
-         "ELF TLS only supported in small memory model");
+  if (getTargetMachine().getCodeModel() == CodeModel::Large)
+    report_fatal_error("ELF TLS only supported in small memory model");
   // Different choices can be made for the maximum size of the TLS area for a
   // module. For the small address model, the default TLS size is 16MiB and the
   // maximum TLS size is 4GiB.
   // FIXME: add -mtls-size command line option and make it control the 16MiB
   // vs. 4GiB code sequence generation.
+  // FIXME: add tiny codemodel support. We currently generate the same code as
+  // small, which may be larger than needed.
   const GlobalAddressSDNode *GA = cast<GlobalAddressSDNode>(Op);
 
   TLSModel::Model Model = getTargetMachine().getTLSModel(GA->getGlobal());
@@ -4779,6 +4793,8 @@ SDValue AArch64TargetLowering::LowerJumpTable(SDValue Op,
   if (getTargetMachine().getCodeModel() == CodeModel::Large &&
       !Subtarget->isTargetMachO()) {
     return getAddrLarge(JT, DAG);
+  } else if (getTargetMachine().getCodeModel() == CodeModel::Tiny) {
+    return getAddrTiny(JT, DAG);
   }
   return getAddr(JT, DAG);
 }
@@ -4793,6 +4809,8 @@ SDValue AArch64TargetLowering::LowerConstantPool(SDValue Op,
       return getGOT(CP, DAG);
     }
     return getAddrLarge(CP, DAG);
+  } else if (getTargetMachine().getCodeModel() == CodeModel::Tiny) {
+    return getAddrTiny(CP, DAG);
   } else {
     return getAddr(CP, DAG);
   }
@@ -4804,9 +4822,10 @@ SDValue AArch64TargetLowering::LowerBlockAddress(SDValue Op,
   if (getTargetMachine().getCodeModel() == CodeModel::Large &&
       !Subtarget->isTargetMachO()) {
     return getAddrLarge(BA, DAG);
-  } else {
-    return getAddr(BA, DAG);
+  } else if (getTargetMachine().getCodeModel() == CodeModel::Tiny) {
+    return getAddrTiny(BA, DAG);
   }
+  return getAddr(BA, DAG);
 }
 
 SDValue AArch64TargetLowering::LowerDarwin_VASTART(SDValue Op,
@@ -5176,40 +5195,29 @@ bool AArch64TargetLowering::isFPImmLegal(const APFloat &Imm, EVT VT) const {
   // FIXME: We should be able to handle f128 as well with a clever lowering.
   if (Imm.isPosZero() && (VT == MVT::f64 || VT == MVT::f32 ||
                           (VT == MVT::f16 && Subtarget->hasFullFP16()))) {
-    LLVM_DEBUG(
-        dbgs() << "Legal fp imm: materialize 0 using the zero register\n");
+    LLVM_DEBUG(dbgs() << "Legal " << VT.getEVTString() << " imm value: 0\n");
     return true;
   }
 
-  StringRef FPType;
   bool IsLegal = false;
   SmallString<128> ImmStrVal;
   Imm.toString(ImmStrVal);
 
-  if (VT == MVT::f64) {
-    FPType = "f64";
+  if (VT == MVT::f64)
     IsLegal = AArch64_AM::getFP64Imm(Imm) != -1;
-  } else if (VT == MVT::f32) {
-    FPType = "f32";
+  else if (VT == MVT::f32)
     IsLegal = AArch64_AM::getFP32Imm(Imm) != -1;
-  } else if (VT == MVT::f16 && Subtarget->hasFullFP16()) {
-    FPType = "f16";
+  else if (VT == MVT::f16 && Subtarget->hasFullFP16())
     IsLegal = AArch64_AM::getFP16Imm(Imm) != -1;
-  }
 
   if (IsLegal) {
-    LLVM_DEBUG(dbgs() << "Legal " << FPType << " imm value: " << ImmStrVal
-                      << "\n");
+    LLVM_DEBUG(dbgs() << "Legal " << VT.getEVTString()
+                      << " imm value: " << ImmStrVal << "\n");
     return true;
   }
 
-  if (!FPType.empty())
-    LLVM_DEBUG(dbgs() << "Illegal " << FPType << " imm value: " << ImmStrVal
-                      << "\n");
-  else
-    LLVM_DEBUG(dbgs() << "Illegal fp imm " << ImmStrVal
-                      << ": unsupported fp type\n");
-
+  LLVM_DEBUG(dbgs() << "Illegal " << VT.getEVTString()
+                    << " imm value: " << ImmStrVal << "\n");
   return false;
 }
 
@@ -5421,6 +5429,8 @@ AArch64TargetLowering::getRegForInlineAsmConstraint(
         return std::make_pair(0U, &AArch64::GPR64commonRegClass);
       return std::make_pair(0U, &AArch64::GPR32commonRegClass);
     case 'w':
+      if (!Subtarget->hasFPARMv8())
+        break;
       if (VT.getSizeInBits() == 16)
         return std::make_pair(0U, &AArch64::FPR16RegClass);
       if (VT.getSizeInBits() == 32)
@@ -5433,6 +5443,8 @@ AArch64TargetLowering::getRegForInlineAsmConstraint(
     // The instructions that this constraint is designed for can
     // only take 128-bit registers so just use that regclass.
     case 'x':
+      if (!Subtarget->hasFPARMv8())
+        break;
       if (VT.getSizeInBits() == 128)
         return std::make_pair(0U, &AArch64::FPR128_loRegClass);
       break;
@@ -5467,6 +5479,11 @@ AArch64TargetLowering::getRegForInlineAsmConstraint(
       }
     }
   }
+
+  if (Res.second && !Subtarget->hasFPARMv8() &&
+      !AArch64::GPR32allRegClass.hasSubClassEq(Res.second) &&
+      !AArch64::GPR64allRegClass.hasSubClassEq(Res.second))
+    return std::make_pair(0U, nullptr);
 
   return Res;
 }
@@ -6889,10 +6906,19 @@ static SDValue NormalizeBuildVector(SDValue Op,
 
   SmallVector<SDValue, 16> Ops;
   for (SDValue Lane : Op->ops()) {
+    // For integer vectors, type legalization would have promoted the
+    // operands already. Otherwise, if Op is a floating-point splat
+    // (with operands cast to integers), then the only possibilities
+    // are constants and UNDEFs.
     if (auto *CstLane = dyn_cast<ConstantSDNode>(Lane)) {
       APInt LowBits(EltTy.getSizeInBits(),
                     CstLane->getZExtValue());
       Lane = DAG.getConstant(LowBits.getZExtValue(), dl, MVT::i32);
+    } else if (Lane.getNode()->isUndef()) {
+      Lane = DAG.getUNDEF(MVT::i32);
+    } else {
+      assert(Lane.getValueType() == MVT::i32 &&
+             "Unexpected BUILD_VECTOR operand type");
     }
     Ops.push_back(Lane);
   }
@@ -8316,27 +8342,30 @@ EVT AArch64TargetLowering::getOptimalMemOpType(uint64_t Size, unsigned DstAlign,
                                                bool ZeroMemset,
                                                bool MemcpyStrSrc,
                                                MachineFunction &MF) const {
-  // Don't use AdvSIMD to implement 16-byte memset. It would have taken one
-  // instruction to materialize the v2i64 zero and one store (with restrictive
-  // addressing mode). Just do two i64 store of zero-registers.
-  bool Fast;
   const Function &F = MF.getFunction();
-  if (Subtarget->hasFPARMv8() && !IsMemset && Size >= 16 &&
-      !F.hasFnAttribute(Attribute::NoImplicitFloat) &&
-      (memOpAlign(SrcAlign, DstAlign, 16) ||
-       (allowsMisalignedMemoryAccesses(MVT::f128, 0, 1, &Fast) && Fast)))
+  bool CanImplicitFloat = !F.hasFnAttribute(Attribute::NoImplicitFloat);
+  bool CanUseNEON = Subtarget->hasNEON() && CanImplicitFloat;
+  bool CanUseFP = Subtarget->hasFPARMv8() && CanImplicitFloat;
+  // Only use AdvSIMD to implement memset of 32-byte and above. It would have
+  // taken one instruction to materialize the v2i64 zero and one store (with
+  // restrictive addressing mode). Just do i64 stores.
+  bool IsSmallMemset = IsMemset && Size < 32;
+  auto AlignmentIsAcceptable = [&](EVT VT, unsigned AlignCheck) {
+    if (memOpAlign(SrcAlign, DstAlign, AlignCheck))
+      return true;
+    bool Fast;
+    return allowsMisalignedMemoryAccesses(VT, 0, 1, &Fast) && Fast;
+  };
+
+  if (CanUseNEON && IsMemset && !IsSmallMemset &&
+      AlignmentIsAcceptable(MVT::v2i64, 16))
+    return MVT::v2i64;
+  if (CanUseFP && !IsSmallMemset && AlignmentIsAcceptable(MVT::f128, 16))
     return MVT::f128;
-
-  if (Size >= 8 &&
-      (memOpAlign(SrcAlign, DstAlign, 8) ||
-       (allowsMisalignedMemoryAccesses(MVT::i64, 0, 1, &Fast) && Fast)))
+  if (Size >= 8 && AlignmentIsAcceptable(MVT::i64, 8))
     return MVT::i64;
-
-  if (Size >= 4 &&
-      (memOpAlign(SrcAlign, DstAlign, 4) ||
-       (allowsMisalignedMemoryAccesses(MVT::i32, 0, 1, &Fast) && Fast)))
+  if (Size >= 4 && AlignmentIsAcceptable(MVT::i32, 4))
     return MVT::i32;
-
   return MVT::Other;
 }
 
@@ -8464,7 +8493,9 @@ AArch64TargetLowering::getScratchRegisters(CallingConv::ID) const {
 }
 
 bool
-AArch64TargetLowering::isDesirableToCommuteWithShift(const SDNode *N) const {
+AArch64TargetLowering::isDesirableToCommuteWithShift(const SDNode *N,
+                                                     CombineLevel Level) const {
+  N = N->getOperand(0).getNode();
   EVT VT = N->getValueType(0);
     // If N is unsigned bit extraction: ((x >> C) & mask), then do not combine
     // it with shift to let it be lowered to UBFX.
@@ -8580,7 +8611,7 @@ static SDValue performXorCombine(SDNode *N, SelectionDAG &DAG,
 SDValue
 AArch64TargetLowering::BuildSDIVPow2(SDNode *N, const APInt &Divisor,
                                      SelectionDAG &DAG,
-                                     std::vector<SDNode *> *Created) const {
+                                     SmallVectorImpl<SDNode *> &Created) const {
   AttributeList Attr = DAG.getMachineFunction().getFunction().getAttributes();
   if (isIntDivCheap(N->getValueType(0), Attr))
     return SDValue(N,0); // Lower SDIV as SDIV
@@ -8603,11 +8634,9 @@ AArch64TargetLowering::BuildSDIVPow2(SDNode *N, const APInt &Divisor,
   SDValue Add = DAG.getNode(ISD::ADD, DL, VT, N0, Pow2MinusOne);
   SDValue CSel = DAG.getNode(AArch64ISD::CSEL, DL, VT, Add, N0, CCVal, Cmp);
 
-  if (Created) {
-    Created->push_back(Cmp.getNode());
-    Created->push_back(Add.getNode());
-    Created->push_back(CSel.getNode());
-  }
+  Created.push_back(Cmp.getNode());
+  Created.push_back(Add.getNode());
+  Created.push_back(CSel.getNode());
 
   // Divide by pow2.
   SDValue SRA =
@@ -8618,8 +8647,7 @@ AArch64TargetLowering::BuildSDIVPow2(SDNode *N, const APInt &Divisor,
   if (Divisor.isNonNegative())
     return SRA;
 
-  if (Created)
-    Created->push_back(SRA.getNode());
+  Created.push_back(SRA.getNode());
   return DAG.getNode(ISD::SUB, DL, VT, DAG.getConstant(0, DL, VT), SRA);
 }
 
@@ -11167,12 +11195,10 @@ static void ReplaceCMP_SWAP_128Results(SDNode *N,
         N->getOperand(0), // Chain in
     };
 
-    MachineFunction &MF = DAG.getMachineFunction();
-    MachineSDNode::mmo_iterator MemOp = MF.allocateMemRefsArray(1);
-    MemOp[0] = cast<MemSDNode>(N)->getMemOperand();
+    MachineMemOperand *MemOp = cast<MemSDNode>(N)->getMemOperand();
 
     unsigned Opcode;
-    switch (MemOp[0]->getOrdering()) {
+    switch (MemOp->getOrdering()) {
     case AtomicOrdering::Monotonic:
       Opcode = AArch64::CASPX;
       break;
@@ -11192,7 +11218,7 @@ static void ReplaceCMP_SWAP_128Results(SDNode *N,
 
     MachineSDNode *CmpSwap = DAG.getMachineNode(
         Opcode, SDLoc(N), DAG.getVTList(MVT::Untyped, MVT::Other), Ops);
-    CmpSwap->setMemRefs(MemOp, MemOp + 1);
+    DAG.setNodeMemRefs(CmpSwap, {MemOp});
 
     unsigned SubReg1 = AArch64::sube64, SubReg2 = AArch64::subo64;
     if (DAG.getDataLayout().isBigEndian())
@@ -11213,10 +11239,8 @@ static void ReplaceCMP_SWAP_128Results(SDNode *N,
       AArch64::CMP_SWAP_128, SDLoc(N),
       DAG.getVTList(MVT::i64, MVT::i64, MVT::i32, MVT::Other), Ops);
 
-  MachineFunction &MF = DAG.getMachineFunction();
-  MachineSDNode::mmo_iterator MemOp = MF.allocateMemRefsArray(1);
-  MemOp[0] = cast<MemSDNode>(N)->getMemOperand();
-  cast<MachineSDNode>(CmpSwap)->setMemRefs(MemOp, MemOp + 1);
+  MachineMemOperand *MemOp = cast<MemSDNode>(N)->getMemOperand();
+  DAG.setNodeMemRefs(cast<MachineSDNode>(CmpSwap), {MemOp});
 
   Results.push_back(SDValue(CmpSwap, 0));
   Results.push_back(SDValue(CmpSwap, 1));

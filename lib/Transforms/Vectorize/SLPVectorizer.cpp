@@ -345,7 +345,7 @@ static Value *isOneOf(const InstructionsState &S, Value *Op) {
 }
 
 /// \returns analysis of the Instructions in \p VL described in
-/// InstructionsState, the Opcode that we suppose the whole list 
+/// InstructionsState, the Opcode that we suppose the whole list
 /// could be vectorized even if its structure is diverse.
 static InstructionsState getSameOpcode(ArrayRef<Value *> VL,
                                        unsigned BaseIndex = 0) {
@@ -363,23 +363,29 @@ static InstructionsState getSameOpcode(ArrayRef<Value *> VL,
   // TODO - generalize to support all operators (types, calls etc.).
   for (int Cnt = 0, E = VL.size(); Cnt < E; Cnt++) {
     unsigned InstOpcode = cast<Instruction>(VL[Cnt])->getOpcode();
-    if (InstOpcode != Opcode && InstOpcode != AltOpcode) {
-      if (Opcode == AltOpcode && IsCastOp && isa<CastInst>(VL[Cnt])) {
-        Type *Ty0 = cast<Instruction>(VL[BaseIndex])->getOperand(0)->getType();
-        Type *Ty1 = cast<Instruction>(VL[Cnt])->getOperand(0)->getType();
-        if (Ty0 == Ty1) {
+    if (IsBinOp && isa<BinaryOperator>(VL[Cnt])) {
+      if (InstOpcode == Opcode || InstOpcode == AltOpcode)
+        continue;
+      if (Opcode == AltOpcode) {
+        AltOpcode = InstOpcode;
+        AltIndex = Cnt;
+        continue;
+      }
+    } else if (IsCastOp && isa<CastInst>(VL[Cnt])) {
+      Type *Ty0 = cast<Instruction>(VL[BaseIndex])->getOperand(0)->getType();
+      Type *Ty1 = cast<Instruction>(VL[Cnt])->getOperand(0)->getType();
+      if (Ty0 == Ty1) {
+        if (InstOpcode == Opcode || InstOpcode == AltOpcode)
+          continue;
+        if (Opcode == AltOpcode) {
           AltOpcode = InstOpcode;
           AltIndex = Cnt;
           continue;
         }
       }
-      if (Opcode == AltOpcode && IsBinOp && isa<BinaryOperator>(VL[Cnt])) {
-        AltOpcode = InstOpcode;
-        AltIndex = Cnt;
-        continue;
-      }
-      return InstructionsState(VL[BaseIndex], nullptr, nullptr);
-    }
+    } else if (InstOpcode == Opcode || InstOpcode == AltOpcode)
+      continue;
+    return InstructionsState(VL[BaseIndex], nullptr, nullptr);
   }
 
   return InstructionsState(VL[BaseIndex], cast<Instruction>(VL[BaseIndex]),
@@ -2185,22 +2191,21 @@ int BoUpSLP::getEntryCost(TreeEntry *E) {
     case Instruction::FPTrunc:
     case Instruction::BitCast: {
       Type *SrcTy = VL0->getOperand(0)->getType();
+      int ScalarEltCost =
+          TTI->getCastInstrCost(S.getOpcode(), ScalarTy, SrcTy, VL0);
       if (NeedToShuffleReuses) {
-        ReuseShuffleCost -=
-            (ReuseShuffleNumbers - VL.size()) *
-            TTI->getCastInstrCost(S.getOpcode(), ScalarTy, SrcTy, VL0);
+        ReuseShuffleCost -= (ReuseShuffleNumbers - VL.size()) * ScalarEltCost;
       }
 
       // Calculate the cost of this instruction.
-      int ScalarCost = VL.size() * TTI->getCastInstrCost(VL0->getOpcode(),
-                                                         VL0->getType(), SrcTy, VL0);
+      int ScalarCost = VL.size() * ScalarEltCost;
 
       VectorType *SrcVecTy = VectorType::get(SrcTy, VL.size());
       int VecCost = 0;
       // Check if the values are candidates to demote.
       if (!MinBWs.count(VL0) || VecTy != SrcVecTy) {
         VecCost = ReuseShuffleCost +
-                  TTI->getCastInstrCost(VL0->getOpcode(), VecTy, SrcVecTy, VL0);
+                  TTI->getCastInstrCost(S.getOpcode(), VecTy, SrcVecTy, VL0);
       }
       return VecCost - ScalarCost;
     }
@@ -2208,15 +2213,13 @@ int BoUpSLP::getEntryCost(TreeEntry *E) {
     case Instruction::ICmp:
     case Instruction::Select: {
       // Calculate the cost of this instruction.
+      int ScalarEltCost = TTI->getCmpSelInstrCost(S.getOpcode(), ScalarTy,
+                                                  Builder.getInt1Ty(), VL0);
       if (NeedToShuffleReuses) {
-        ReuseShuffleCost -= (ReuseShuffleNumbers - VL.size()) *
-                            TTI->getCmpSelInstrCost(S.getOpcode(), ScalarTy,
-                                                    Builder.getInt1Ty(), VL0);
+        ReuseShuffleCost -= (ReuseShuffleNumbers - VL.size()) * ScalarEltCost;
       }
       VectorType *MaskTy = VectorType::get(Builder.getInt1Ty(), VL.size());
-      int ScalarCost = VecTy->getNumElements() *
-                       TTI->getCmpSelInstrCost(S.getOpcode(), ScalarTy,
-                                               Builder.getInt1Ty(), VL0);
+      int ScalarCost = VecTy->getNumElements() * ScalarEltCost;
       int VecCost = TTI->getCmpSelInstrCost(S.getOpcode(), VecTy, MaskTy, VL0);
       return ReuseShuffleCost + VecCost - ScalarCost;
     }
@@ -2275,16 +2278,12 @@ int BoUpSLP::getEntryCost(TreeEntry *E) {
       }
 
       SmallVector<const Value *, 4> Operands(VL0->operand_values());
+      int ScalarEltCost = TTI->getArithmeticInstrCost(
+          S.getOpcode(), ScalarTy, Op1VK, Op2VK, Op1VP, Op2VP, Operands);
       if (NeedToShuffleReuses) {
-        ReuseShuffleCost -=
-            (ReuseShuffleNumbers - VL.size()) *
-            TTI->getArithmeticInstrCost(S.getOpcode(), ScalarTy, Op1VK, Op2VK,
-                                        Op1VP, Op2VP, Operands);
+        ReuseShuffleCost -= (ReuseShuffleNumbers - VL.size()) * ScalarEltCost;
       }
-      int ScalarCost =
-          VecTy->getNumElements() *
-          TTI->getArithmeticInstrCost(S.getOpcode(), ScalarTy, Op1VK, Op2VK,
-                                      Op1VP, Op2VP, Operands);
+      int ScalarCost = VecTy->getNumElements() * ScalarEltCost;
       int VecCost = TTI->getArithmeticInstrCost(S.getOpcode(), VecTy, Op1VK,
                                                 Op2VK, Op1VP, Op2VP, Operands);
       return ReuseShuffleCost + VecCost - ScalarCost;
@@ -2295,31 +2294,27 @@ int BoUpSLP::getEntryCost(TreeEntry *E) {
       TargetTransformInfo::OperandValueKind Op2VK =
           TargetTransformInfo::OK_UniformConstantValue;
 
-      if (NeedToShuffleReuses) {
-        ReuseShuffleCost -= (ReuseShuffleNumbers - VL.size()) *
-                            TTI->getArithmeticInstrCost(Instruction::Add,
-                                                        ScalarTy, Op1VK, Op2VK);
-      }
-      int ScalarCost =
-          VecTy->getNumElements() *
+      int ScalarEltCost =
           TTI->getArithmeticInstrCost(Instruction::Add, ScalarTy, Op1VK, Op2VK);
+      if (NeedToShuffleReuses) {
+        ReuseShuffleCost -= (ReuseShuffleNumbers - VL.size()) * ScalarEltCost;
+      }
+      int ScalarCost = VecTy->getNumElements() * ScalarEltCost;
       int VecCost =
           TTI->getArithmeticInstrCost(Instruction::Add, VecTy, Op1VK, Op2VK);
-
       return ReuseShuffleCost + VecCost - ScalarCost;
     }
     case Instruction::Load: {
       // Cost of wide load - cost of scalar loads.
       unsigned alignment = cast<LoadInst>(VL0)->getAlignment();
-      if (NeedToShuffleReuses) {
-        ReuseShuffleCost -= (ReuseShuffleNumbers - VL.size()) *
-                            TTI->getMemoryOpCost(Instruction::Load, ScalarTy,
-                                                 alignment, 0, VL0);
-      }
-      int ScalarLdCost = VecTy->getNumElements() *
+      int ScalarEltCost =
           TTI->getMemoryOpCost(Instruction::Load, ScalarTy, alignment, 0, VL0);
-      int VecLdCost = TTI->getMemoryOpCost(Instruction::Load,
-                                           VecTy, alignment, 0, VL0);
+      if (NeedToShuffleReuses) {
+        ReuseShuffleCost -= (ReuseShuffleNumbers - VL.size()) * ScalarEltCost;
+      }
+      int ScalarLdCost = VecTy->getNumElements() * ScalarEltCost;
+      int VecLdCost =
+          TTI->getMemoryOpCost(Instruction::Load, VecTy, alignment, 0, VL0);
       if (!E->ReorderIndices.empty()) {
         // TODO: Merge this shuffle with the ReuseShuffleCost.
         VecLdCost += TTI->getShuffleCost(
@@ -2330,15 +2325,14 @@ int BoUpSLP::getEntryCost(TreeEntry *E) {
     case Instruction::Store: {
       // We know that we can merge the stores. Calculate the cost.
       unsigned alignment = cast<StoreInst>(VL0)->getAlignment();
-      if (NeedToShuffleReuses) {
-        ReuseShuffleCost -= (ReuseShuffleNumbers - VL.size()) *
-                            TTI->getMemoryOpCost(Instruction::Store, ScalarTy,
-                                                 alignment, 0, VL0);
-      }
-      int ScalarStCost = VecTy->getNumElements() *
+      int ScalarEltCost =
           TTI->getMemoryOpCost(Instruction::Store, ScalarTy, alignment, 0, VL0);
-      int VecStCost = TTI->getMemoryOpCost(Instruction::Store,
-                                           VecTy, alignment, 0, VL0);
+      if (NeedToShuffleReuses) {
+        ReuseShuffleCost -= (ReuseShuffleNumbers - VL.size()) * ScalarEltCost;
+      }
+      int ScalarStCost = VecTy->getNumElements() * ScalarEltCost;
+      int VecStCost =
+          TTI->getMemoryOpCost(Instruction::Store, VecTy, alignment, 0, VL0);
       return ReuseShuffleCost + VecStCost - ScalarStCost;
     }
     case Instruction::Call: {
@@ -2346,21 +2340,20 @@ int BoUpSLP::getEntryCost(TreeEntry *E) {
       Intrinsic::ID ID = getVectorIntrinsicIDForCall(CI, TLI);
 
       // Calculate the cost of the scalar and vector calls.
-      SmallVector<Type*, 4> ScalarTys;
-      for (unsigned op = 0, opc = CI->getNumArgOperands(); op!= opc; ++op)
+      SmallVector<Type *, 4> ScalarTys;
+      for (unsigned op = 0, opc = CI->getNumArgOperands(); op != opc; ++op)
         ScalarTys.push_back(CI->getArgOperand(op)->getType());
 
       FastMathFlags FMF;
       if (auto *FPMO = dyn_cast<FPMathOperator>(CI))
         FMF = FPMO->getFastMathFlags();
 
-      if (NeedToShuffleReuses) {
-        ReuseShuffleCost -=
-            (ReuseShuffleNumbers - VL.size()) *
-            TTI->getIntrinsicInstrCost(ID, ScalarTy, ScalarTys, FMF);
-      }
-      int ScalarCallCost = VecTy->getNumElements() *
+      int ScalarEltCost =
           TTI->getIntrinsicInstrCost(ID, ScalarTy, ScalarTys, FMF);
+      if (NeedToShuffleReuses) {
+        ReuseShuffleCost -= (ReuseShuffleNumbers - VL.size()) * ScalarEltCost;
+      }
+      int ScalarCallCost = VecTy->getNumElements() * ScalarEltCost;
 
       SmallVector<Value *, 4> Args(CI->arg_operands());
       int VecCallCost = TTI->getIntrinsicInstrCost(ID, CI->getType(), Args, FMF,
@@ -2392,7 +2385,6 @@ int BoUpSLP::getEntryCost(TreeEntry *E) {
               I, TargetTransformInfo::TCK_RecipThroughput);
         }
       }
-      int VecCost = 0;
       for (Value *i : VL) {
         Instruction *I = cast<Instruction>(i);
         assert(S.isOpcodeOrAlt(I) && "Unexpected main/alternate opcode");
@@ -2401,6 +2393,7 @@ int BoUpSLP::getEntryCost(TreeEntry *E) {
       }
       // VecCost is equal to sum of the cost of creating 2 vectors
       // and the cost of creating shuffle.
+      int VecCost = 0;
       if (Instruction::isBinaryOp(S.getOpcode())) {
         VecCost = TTI->getArithmeticInstrCost(S.getOpcode(), VecTy);
         VecCost += TTI->getArithmeticInstrCost(S.getAltOpcode(), VecTy);
@@ -3116,7 +3109,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
         }
         if (NeedToShuffleReuses) {
           // TODO: Merge this shuffle with the ReorderShuffleMask.
-          if (!E->ReorderIndices.empty())
+          if (E->ReorderIndices.empty())
             Builder.SetInsertPoint(VL0);
           V = Builder.CreateShuffleVector(V, UndefValue::get(VecTy),
                                           E->ReuseShuffleIndices, "shuffle");
@@ -4847,7 +4840,7 @@ void SLPVectorizerPass::collectSeedInstructions(BasicBlock *BB) {
         continue;
       if (GEP->getType()->isVectorTy())
         continue;
-      GEPs[GetUnderlyingObject(GEP->getPointerOperand(), *DL)].push_back(GEP);
+      GEPs[GEP->getPointerOperand()].push_back(GEP);
     }
   }
 }
@@ -5625,6 +5618,8 @@ public:
 
     Type *Ty = B->getType();
     if (!isValidElementType(Ty))
+      return false;
+    if (!Ty->isIntOrIntVectorTy() && !Ty->isFPOrFPVectorTy())
       return false;
 
     ReducedValueData.clear();

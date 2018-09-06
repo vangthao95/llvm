@@ -170,13 +170,18 @@ public:
                 SMLoc Loc = SMLoc()) override;
   void EmitFileDirective(StringRef Filename) override;
 
+  void EmitAddrsig() override;
+  void EmitAddrsigSym(const MCSymbol *Sym) override;
+
   void FinishImpl() override;
 
   /// Emit the absolute difference between two symbols if possible.
   ///
   /// Emit the absolute difference between \c Hi and \c Lo, as long as we can
   /// compute it.  Currently, that requires that both symbols are in the same
-  /// data fragment.  Otherwise, do nothing and return \c false.
+  /// data fragment and that the target has not specified that diff expressions
+  /// require relocations to be emitted. Otherwise, do nothing and return
+  /// \c false.
   ///
   /// \pre Offset of \c Hi is greater than the offset \c Lo.
   void emitAbsoluteSymbolDiff(const MCSymbol *Hi, const MCSymbol *Lo,

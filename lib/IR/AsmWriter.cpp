@@ -1604,6 +1604,8 @@ struct MDFieldPrinter {
   void printDwarfEnum(StringRef Name, IntTy Value, Stringifier toString,
                       bool ShouldSkipZero = true);
   void printEmissionKind(StringRef Name, DICompileUnit::DebugEmissionKind EK);
+  void printNameTableKind(StringRef Name,
+                          DICompileUnit::DebugNameTableKind NTK);
 };
 
 } // end anonymous namespace
@@ -1699,6 +1701,13 @@ void MDFieldPrinter::printDIFlags(StringRef Name, DINode::DIFlags Flags) {
 void MDFieldPrinter::printEmissionKind(StringRef Name,
                                        DICompileUnit::DebugEmissionKind EK) {
   Out << FS << Name << ": " << DICompileUnit::emissionKindString(EK);
+}
+
+void MDFieldPrinter::printNameTableKind(StringRef Name,
+                                        DICompileUnit::DebugNameTableKind NTK) {
+  if (NTK == DICompileUnit::DebugNameTableKind::Default)
+    return;
+  Out << FS << Name << ": " << DICompileUnit::nameTableKindString(NTK);
 }
 
 template <class IntTy, class Stringifier>
@@ -1805,6 +1814,7 @@ static void writeDIBasicType(raw_ostream &Out, const DIBasicType *N,
   Printer.printInt("align", N->getAlignInBits());
   Printer.printDwarfEnum("encoding", N->getEncoding(),
                          dwarf::AttributeEncodingString);
+  Printer.printDIFlags("flags", N->getFlags());
   Out << ")";
 }
 
@@ -1944,7 +1954,7 @@ static void writeDICompileUnit(raw_ostream &Out, const DICompileUnit *N,
   Printer.printBool("splitDebugInlining", N->getSplitDebugInlining(), true);
   Printer.printBool("debugInfoForProfiling", N->getDebugInfoForProfiling(),
                     false);
-  Printer.printBool("gnuPubnames", N->getGnuPubnames(), false);
+  Printer.printNameTableKind("nameTableKind", N->getNameTableKind());
   Out << ")";
 }
 
@@ -2672,8 +2682,9 @@ void AssemblyWriter::printModuleSummaryIndex() {
   unsigned i = 0;
   for (auto &ModPair : moduleVec) {
     Out << "^" << i++ << " = module: (";
-    Out << "path: \"" << ModPair.first << "\"";
-    Out << ", hash: (";
+    Out << "path: \"";
+    printEscapedString(ModPair.first, Out);
+    Out << "\", hash: (";
     FieldSeparator FS;
     for (auto Hash : ModPair.second)
       Out << FS << Hash;
@@ -2893,22 +2904,6 @@ static std::string getLinkageNameWithSpace(GlobalValue::LinkageTypes LT) {
   return getLinkageName(LT) + " ";
 }
 
-static const char *getHotnessName(CalleeInfo::HotnessType HT) {
-  switch (HT) {
-  case CalleeInfo::HotnessType::Unknown:
-    return "unknown";
-  case CalleeInfo::HotnessType::Cold:
-    return "cold";
-  case CalleeInfo::HotnessType::None:
-    return "none";
-  case CalleeInfo::HotnessType::Hot:
-    return "hot";
-  case CalleeInfo::HotnessType::Critical:
-    return "critical";
-  }
-  llvm_unreachable("invalid hotness");
-}
-
 void AssemblyWriter::printFunctionSummary(const FunctionSummary *FS) {
   Out << ", insts: " << FS->instCount();
 
@@ -3008,11 +3003,13 @@ void AssemblyWriter::printConstVCalls(
   FieldSeparator FS;
   for (auto &ConstVCall : VCallList) {
     Out << FS;
+    Out << "(";
     printVFuncId(ConstVCall.VFunc);
     if (!ConstVCall.Args.empty()) {
       Out << ", ";
       printArgs(ConstVCall.Args);
     }
+    Out << ")";
   }
   Out << ")";
 }
@@ -3407,6 +3404,13 @@ void AssemblyWriter::printFunction(const Function *F) {
   StringRef UA = getUnnamedAddrEncoding(F->getUnnamedAddr());
   if (!UA.empty())
     Out << ' ' << UA;
+  // We print the function address space if it is non-zero or if we are writing
+  // a module with a non-zero program address space or if there is no valid
+  // Module* so that the file can be parsed without the datalayout string.
+  const Module *Mod = F->getParent();
+  if (F->getAddressSpace() != 0 || !Mod ||
+      Mod->getDataLayout().getProgramAddressSpace() != 0)
+    Out << " addrspace(" << F->getAddressSpace() << ")";
   if (Attrs.hasAttributes(AttributeList::FunctionIndex))
     Out << " #" << Machine.getAttributeGroupSlot(Attrs.getFnAttributes());
   if (F->hasSection()) {
@@ -3542,6 +3546,23 @@ void AssemblyWriter::printInfoComment(const Value &V) {
 
   if (AnnotationWriter)
     AnnotationWriter->printInfoComment(V, Out);
+}
+
+static void maybePrintCallAddrSpace(const Value *Operand, const Instruction *I,
+                                    raw_ostream &Out) {
+  // We print the address space of the call if it is non-zero.
+  unsigned CallAddrSpace = Operand->getType()->getPointerAddressSpace();
+  bool PrintAddrSpace = CallAddrSpace != 0;
+  if (!PrintAddrSpace) {
+    const Module *Mod = getModuleFromVal(I);
+    // We also print it if it is zero but not equal to the program address space
+    // or if we can't find a valid Module* to make it possible to parse
+    // the resulting file even without a datalayout string.
+    if (!Mod || Mod->getDataLayout().getProgramAddressSpace() != 0)
+      PrintAddrSpace = true;
+  }
+  if (PrintAddrSpace)
+    Out << " addrspace(" << CallAddrSpace << ")";
 }
 
 // This member is called for each Instruction in a function..
@@ -3741,6 +3762,9 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
     if (PAL.hasAttributes(AttributeList::ReturnIndex))
       Out << ' ' << PAL.getAsString(AttributeList::ReturnIndex);
 
+    // Only print addrspace(N) if necessary:
+    maybePrintCallAddrSpace(Operand, &I, Out);
+
     // If possible, print out the short form of the call instruction.  We can
     // only do this if the first argument is a pointer to a nonvararg function,
     // and if the return type is not a pointer to a function.
@@ -3782,6 +3806,9 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
 
     if (PAL.hasAttributes(AttributeList::ReturnIndex))
       Out << ' ' << PAL.getAsString(AttributeList::ReturnIndex);
+
+    // Only print addrspace(N) if necessary:
+    maybePrintCallAddrSpace(Operand, &I, Out);
 
     // If possible, print out the short form of the invoke instruction. We can
     // only do this if the first argument is a pointer to a nonvararg function,

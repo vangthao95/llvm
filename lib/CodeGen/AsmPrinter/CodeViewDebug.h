@@ -14,7 +14,7 @@
 #ifndef LLVM_LIB_CODEGEN_ASMPRINTER_CODEVIEWDEBUG_H
 #define LLVM_LIB_CODEGEN_ASMPRINTER_CODEVIEWDEBUG_H
 
-#include "DbgValueHistoryCalculator.h"
+#include "DbgEntityHistoryCalculator.h"
 #include "DebugHandlerBase.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -225,7 +225,7 @@ class LLVM_LIBRARY_VISIBILITY CodeViewDebug : public DebugHandlerBase {
   using FileToFilepathMapTy = std::map<const DIFile *, std::string>;
   FileToFilepathMapTy FileToFilepathMap;
 
-  StringRef getFullFilepath(const DIFile *S);
+  StringRef getFullFilepath(const DIFile *File);
 
   unsigned maybeRecordFile(const DIFile *F);
 
@@ -277,11 +277,11 @@ class LLVM_LIBRARY_VISIBILITY CodeViewDebug : public DebugHandlerBase {
   void emitInlinedCallSite(const FunctionInfo &FI, const DILocation *InlinedAt,
                            const InlineSite &Site);
 
-  using InlinedVariable = DbgValueHistoryMap::InlinedVariable;
+  using InlinedEntity = DbgValueHistoryMap::InlinedEntity;
 
   void collectVariableInfo(const DISubprogram *SP);
 
-  void collectVariableInfoFromMFTable(DenseSet<InlinedVariable> &Processed);
+  void collectVariableInfoFromMFTable(DenseSet<InlinedEntity> &Processed);
 
   // Construct the lexical block tree for a routine, pruning emptpy lexical
   // scopes, and populate it with local variables.
@@ -386,7 +386,7 @@ protected:
   void endFunctionImpl(const MachineFunction *) override;
 
 public:
-  CodeViewDebug(AsmPrinter *Asm);
+  CodeViewDebug(AsmPrinter *AP);
 
   void setSymbolSize(const MCSymbol *, uint64_t) override {}
 
