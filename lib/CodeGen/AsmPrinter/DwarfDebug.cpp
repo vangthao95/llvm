@@ -1263,31 +1263,33 @@ static bool validThroughout(LexicalScopes &LScopes,
 
 void DwarfDebug::populateDependentTypeMap() {
   for (const auto &I : DbgValues) {
-    InlinedVariable IV = I.first;
+    InlinedEntity IV = I.first;
     if (I.second.empty())
       continue;
 
-    if (const DIStringType *ST = dyn_cast<DIStringType>(
-            static_cast<const Metadata *>(IV.first->getType())))
-      if (const DIVariable *LV = ST->getStringLength())
-        VariableInDependentType[LV] = ST;
+    if (const DIVariable *V = dyn_cast<DIVariable>(IV.first)) {
+      if (const DIStringType *ST = dyn_cast<DIStringType>(
+              static_cast<const Metadata *>(V->getType())))
+        if (const DIVariable *LV = ST->getStringLength())
+          VariableInDependentType[LV] = ST;
 
-    if (const DIFortranArrayType *AT = dyn_cast<DIFortranArrayType>(
-            static_cast<const Metadata *>(IV.first->getType())))
-      for (const DINode *S : AT->getElements())
-        if (const DIFortranSubrange *FS = dyn_cast<DIFortranSubrange>(S)) {
-          if (const DIVariable *LBV = FS->getLowerBound())
-            VariableInDependentType[LBV] = AT;
-          if (const DIVariable *UBV = FS->getUpperBound())
-            VariableInDependentType[UBV] = AT;
-        }
+      if (const DIFortranArrayType *AT = dyn_cast<DIFortranArrayType>(
+              static_cast<const Metadata *>(V->getType())))
+        for (const DINode *S : AT->getElements())
+          if (const DIFortranSubrange *FS = dyn_cast<DIFortranSubrange>(S)) {
+            if (const DIVariable *LBV = FS->getLowerBound())
+              VariableInDependentType[LBV] = AT;
+            if (const DIVariable *UBV = FS->getUpperBound())
+              VariableInDependentType[UBV] = AT;
+          }
+    }
   }
 }
 
 // Find variables for each lexical scope.
-void DwarfDebug::collectVariableInfo(DwarfCompileUnit &TheCU,
-                                     const DISubprogram *SP,
-                                     DenseSet<InlinedVariable> &Processed) {
+void DwarfDebug::collectEntityInfo(DwarfCompileUnit &TheCU,
+                                   const DISubprogram *SP,
+                                   DenseSet<InlinedEntity> &Processed) {
   clearDependentTracking();
   populateDependentTypeMap();
   // Grab the variable info that was squirreled away in the MMI side-table.
@@ -1348,20 +1350,23 @@ void DwarfDebug::collectVariableInfo(DwarfCompileUnit &TheCU,
       Entry.finalize(*Asm, List, BT);
     List.finalize();
 
-    if (VariableInDependentType.count(IV.first)) {
-      const DIType *DT = VariableInDependentType[IV.first];
-      if (const DIStringType *ST = dyn_cast<DIStringType>(DT)) {
-        unsigned Offset;
-        DbgVariable TVar = {IV.first, IV.second};
-        DebugLocStream::ListBuilder LB(DebugLocs, TheCU, *Asm, TVar, *MInsn);
-        for (auto &Entry : Entries)
-          Entry.finalize(*Asm, LB, ST);
-        LB.finalize();
-        Offset = TVar.getDebugLocListIndex();
-        if (Offset != ~0u)
-          addStringTypeLoc(ST, Offset);
+    if (const DIVariable *V = dyn_cast<DIVariable>(IV.first))
+      if (VariableInDependentType.count(V)) {
+        const DIType *DT = VariableInDependentType[V];
+        if (const DIStringType *ST = dyn_cast<DIStringType>(DT)) {
+          unsigned Offset;
+          if (const DILocalVariable *LV = dyn_cast<DILocalVariable>(V)) {
+            DbgVariable TVar = {LV, IV.second};
+            DebugLocStream::ListBuilder LB(DebugLocs, TheCU, *Asm, TVar, *MInsn);
+            for (auto &Entry : Entries)
+              Entry.finalize(*Asm, LB, ST);
+            LB.finalize();
+            Offset = TVar.getDebugLocListIndex();
+            if (Offset != ~0u)
+              addStringTypeLoc(ST, Offset);
+          }
+        }
       }
-    }
   }
 
   // For each InlinedEntity collected from DBG_LABEL instructions, convert to
