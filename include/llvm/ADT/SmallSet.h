@@ -49,16 +49,64 @@ private:
   bool isSmall;
 
 public:
-  SmallSetIterator(SetIterTy SetIter) : SetIter(SetIter), isSmall(false) {
-    // Use static_assert here, as the SmallSetIterator type is incomplete in the
-    // class scope.
-    static_assert(std::is_trivially_destructible<SelfTy>() &&
-                      llvm::is_trivially_copy_constructible<SelfTy>() &&
-                      llvm::is_trivially_move_constructible<SelfTy>(),
-                  "SelfTy needs to by trivially constructible and destructible");
-  }
+  SmallSetIterator(SetIterTy SetIter) : SetIter(SetIter), isSmall(false) {}
 
   SmallSetIterator(VecIterTy VecIter) : VecIter(VecIter), isSmall(true) {}
+
+  // Spell out destructor, copy/move constructor and assignment operators for
+  // MSVC STL, where set<T>::const_iterator is not trivially copy constructible.
+  ~SmallSetIterator() {
+    if (isSmall)
+      VecIter.~VecIterTy();
+    else
+      SetIter.~SetIterTy();
+  }
+
+  SmallSetIterator(const SmallSetIterator &Other) : isSmall(Other.isSmall) {
+    if (isSmall)
+      VecIter = Other.VecIter;
+    else
+      // Use placement new, to make sure SetIter is properly constructed, even
+      // if it is not trivially copy-able (e.g. in MSVC).
+      new (&SetIter) SetIterTy(Other.SetIter);
+  }
+
+  SmallSetIterator(SmallSetIterator &&Other) : isSmall(Other.isSmall) {
+    if (isSmall)
+      VecIter = std::move(Other.VecIter);
+    else
+      // Use placement new, to make sure SetIter is properly constructed, even
+      // if it is not trivially copy-able (e.g. in MSVC).
+      new (&SetIter) SetIterTy(std::move(Other.SetIter));
+  }
+
+  SmallSetIterator& operator=(const SmallSetIterator& Other) {
+    // Call destructor for SetIter, so it gets properly destroyed if it is
+    // not trivially destructible in case we are setting VecIter.
+    if (!isSmall)
+      SetIter.~SetIterTy();
+
+    isSmall = Other.isSmall;
+    if (isSmall)
+      VecIter = Other.VecIter;
+    else
+      new (&SetIter) SetIterTy(Other.SetIter);
+    return *this;
+  }
+
+  SmallSetIterator& operator=(SmallSetIterator&& Other) {
+    // Call destructor for SetIter, so it gets properly destroyed if it is
+    // not trivially destructible in case we are setting VecIter.
+    if (!isSmall)
+      SetIter.~SetIterTy();
+
+    isSmall = Other.isSmall;
+    if (isSmall)
+      VecIter = std::move(Other.VecIter);
+    else
+      new (&SetIter) SetIterTy(std::move(Other.SetIter));
+    return *this;
+  }
 
   bool operator==(const SmallSetIterator &RHS) const {
     if (isSmall != RHS.isSmall)
@@ -83,9 +131,6 @@ public:
 /// when the set is small (less than N).  In this case, the set can be
 /// maintained with no mallocs.  If the set gets large, we expand to using an
 /// std::set to maintain reasonable lookup times.
-///
-/// Note that this set does not provide a way to iterate over members in the
-/// set.
 template <typename T, unsigned N, typename C = std::less<T>>
 class SmallSet {
   /// Use a SmallVector to hold the elements here (even though it will never

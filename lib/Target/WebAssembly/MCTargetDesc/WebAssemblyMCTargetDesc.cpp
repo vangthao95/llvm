@@ -36,8 +36,6 @@ using namespace llvm;
 
 static MCAsmInfo *createMCAsmInfo(const MCRegisterInfo & /*MRI*/,
                                   const Triple &TT) {
-  if (TT.isOSBinFormatELF())
-    return new WebAssemblyMCAsmInfoELF(TT);
   return new WebAssemblyMCAsmInfo(TT);
 }
 
@@ -82,10 +80,6 @@ static MCSubtargetInfo *createMCSubtargetInfo(const Triple &TT, StringRef CPU,
 
 static MCTargetStreamer *
 createObjectTargetStreamer(MCStreamer &S, const MCSubtargetInfo &STI) {
-  const Triple &TT = STI.getTargetTriple();
-  if (TT.isOSBinFormatELF())
-    return new WebAssemblyTargetELFStreamer(S);
-
   return new WebAssemblyTargetWasmStreamer(S);
 }
 
@@ -131,11 +125,17 @@ extern "C" void LLVMInitializeWebAssemblyTargetMC() {
 
 wasm::ValType WebAssembly::toValType(const MVT &Ty) {
   switch (Ty.SimpleTy) {
-  case MVT::i32: return wasm::ValType::I32;
-  case MVT::i64: return wasm::ValType::I64;
-  case MVT::f32: return wasm::ValType::F32;
-  case MVT::f64: return wasm::ValType::F64;
-  case MVT::ExceptRef: return wasm::ValType::EXCEPT_REF;
-  default: llvm_unreachable("unexpected type");
+  case MVT::i32:
+    return wasm::ValType::I32;
+  case MVT::i64:
+    return wasm::ValType::I64;
+  case MVT::f32:
+    return wasm::ValType::F32;
+  case MVT::f64:
+    return wasm::ValType::F64;
+  case MVT::ExceptRef:
+    return wasm::ValType::EXCEPT_REF;
+  default:
+    llvm_unreachable("unexpected type");
   }
 }

@@ -29,8 +29,8 @@ class LLVM_LIBRARY_VISIBILITY WebAssemblyAsmPrinter final : public AsmPrinter {
 public:
   explicit WebAssemblyAsmPrinter(TargetMachine &TM,
                                  std::unique_ptr<MCStreamer> Streamer)
-      : AsmPrinter(TM, std::move(Streamer)),
-        Subtarget(nullptr), MRI(nullptr), MFI(nullptr) {}
+      : AsmPrinter(TM, std::move(Streamer)), Subtarget(nullptr), MRI(nullptr),
+        MFI(nullptr) {}
 
   StringRef getPassName() const override {
     return "WebAssembly Assembly Printer";
@@ -57,7 +57,6 @@ public:
   void EmitJumpTableInfo() override;
   void EmitConstantPool() override;
   void EmitFunctionBodyStart() override;
-  void EmitFunctionBodyEnd() override;
   void EmitInstruction(const MachineInstr *MI) override;
   const MCExpr *lowerConstant(const Constant *CV) override;
   bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,

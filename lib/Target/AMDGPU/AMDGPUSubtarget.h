@@ -51,7 +51,7 @@ public:
   enum Generation {
     R600 = 0,
     R700 = 1,
-    EVERGREEN = 2, 
+    EVERGREEN = 2,
     NORTHERN_ISLANDS = 3,
     SOUTHERN_ISLANDS = 4,
     SEA_ISLANDS = 5,
@@ -72,6 +72,7 @@ protected:
   bool HasVOP3PInsts;
   bool HasMulI24;
   bool HasMulU24;
+  bool HasInv2PiInlineImm;
   bool HasFminFmaxLegacy;
   bool EnablePromoteAlloca;
   int LocalMemorySize;
@@ -82,7 +83,7 @@ public:
 
   static const AMDGPUSubtarget &get(const MachineFunction &MF);
   static const AMDGPUSubtarget &get(const TargetMachine &TM,
-                                          const Function &F);
+                                    const Function &F);
 
   /// \returns Default range flat work group size for a calling convention.
   std::pair<unsigned, unsigned> getDefaultFlatWorkGroupSize(CallingConv::ID CC) const;
@@ -170,6 +171,10 @@ public:
     return HasMulU24;
   }
 
+  bool hasInv2PiInlineImm() const {
+    return HasInv2PiInlineImm;
+  }
+
   bool hasFminFmaxLegacy() const {
     return HasFminFmaxLegacy;
   }
@@ -230,6 +235,18 @@ public:
 
   /// Creates value range metadata on an workitemid.* inrinsic call or load.
   bool makeLIDRangeMetadata(Instruction *I) const;
+
+  /// \returns Number of bytes of arguments that are passed to a shader or
+  /// kernel in addition to the explicit ones declared for the function.
+  unsigned getImplicitArgNumBytes(const Function &F) const {
+    if (isMesaKernel(F))
+      return 16;
+    return AMDGPU::getIntegerAttribute(F, "amdgpu-implicitarg-num-bytes", 0);
+  }
+  uint64_t getExplicitKernArgSize(const Function &F,
+                                  unsigned &MaxAlign) const;
+  unsigned getKernArgSegmentSize(const Function &F,
+                                 unsigned &MaxAlign) const;
 
   virtual ~AMDGPUSubtarget() {}
 };
@@ -325,6 +342,7 @@ protected:
   bool IsGCN;
   bool GCN3Encoding;
   bool CIInsts;
+  bool VIInsts;
   bool GFX9Insts;
   bool SGPRInitBug;
   bool HasSMemRealTime;
@@ -334,13 +352,13 @@ protected:
   bool HasVGPRIndexMode;
   bool HasScalarStores;
   bool HasScalarAtomics;
-  bool HasInv2PiInlineImm;
   bool HasSDWAOmod;
   bool HasSDWAScalar;
   bool HasSDWASdst;
   bool HasSDWAMac;
   bool HasSDWAOutModsVOPC;
   bool HasDPP;
+  bool HasR128A16;
   bool HasDLInsts;
   bool D16PreservesUnusedBits;
   bool FlatAddressSpace;
@@ -360,7 +378,6 @@ protected:
   bool FeatureDisable;
 
   SelectionDAGTargetInfo TSInfo;
-  AMDGPUAS AS;
 private:
   SIInstrInfo InstrInfo;
   SITargetLowering TLInfo;
@@ -427,10 +444,6 @@ public:
 
   unsigned getMaxPrivateElementSize() const {
     return MaxPrivateElementSize;
-  }
-
-  AMDGPUAS getAMDGPUAS() const {
-    return AS;
   }
 
   bool hasIntClamp() const {
@@ -669,14 +682,6 @@ public:
     return D16PreservesUnusedBits;
   }
 
-  /// \returns Number of bytes of arguments that are passed to a shader or
-  /// kernel in addition to the explicit ones declared for the function.
-  unsigned getImplicitArgNumBytes(const Function &F) const {
-    if (isMesaKernel(F))
-      return 16;
-    return AMDGPU::getIntegerAttribute(F, "amdgpu-implicitarg-num-bytes", 0);
-  }
-
   // Scratch is allocated in 256 dword per wave blocks for the entire
   // wavefront. When viewed from the perspecive of an arbitrary workitem, this
   // is 4-byte aligned.
@@ -777,12 +782,13 @@ public:
     return HasScalarAtomics;
   }
 
-  bool hasInv2PiInlineImm() const {
-    return HasInv2PiInlineImm;
-  }
 
   bool hasDPP() const {
     return HasDPP;
+  }
+
+  bool hasR128A16() const {
+    return HasR128A16;
   }
 
   bool enableSIScheduler() const {
@@ -824,10 +830,6 @@ public:
   bool hasReadM0SendMsgHazard() const {
     return getGeneration() >= AMDGPUSubtarget::VOLCANIC_ISLANDS;
   }
-
-  uint64_t getExplicitKernArgSize(const Function &F) const;
-  unsigned getKernArgSegmentSize(const Function &F,
-                                 int64_t ExplicitArgBytes = -1) const;
 
   /// Return the maximum number of waves per SIMD for kernels using \p SGPRs
   /// SGPRs
@@ -968,7 +970,6 @@ private:
   R600TargetLowering TLInfo;
   InstrItineraryData InstrItins;
   SelectionDAGTargetInfo TSInfo;
-  AMDGPUAS AS;
 
 public:
   R600Subtarget(const Triple &TT, StringRef CPU, StringRef FS,
@@ -1052,8 +1053,6 @@ public:
   bool hasVertexCache() const { return HasVertexCache; }
 
   short getTexVTXClauseSize() const { return TexVTXClauseSize; }
-
-  AMDGPUAS getAMDGPUAS() const { return AS; }
 
   bool enableMachineScheduler() const override {
     return true;

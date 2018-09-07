@@ -14,8 +14,9 @@
 using namespace llvm;
 using namespace llvm::pdb;
 
-NativeRawSymbol::NativeRawSymbol(NativeSession &PDBSession, SymIndexId SymbolId)
-    : Session(PDBSession), SymbolId(SymbolId) {}
+NativeRawSymbol::NativeRawSymbol(NativeSession &PDBSession, PDB_SymType Tag,
+                                 SymIndexId SymbolId)
+    : Session(PDBSession), Tag(Tag), SymbolId(SymbolId) {}
 
 void NativeRawSymbol::dump(raw_ostream &OS, int Indent) const {}
 
@@ -188,7 +189,7 @@ uint32_t NativeRawSymbol::getLiveRangeStartRelativeVirtualAddress() const {
 }
 
 codeview::RegisterId NativeRawSymbol::getLocalBasePointerRegisterId() const {
-  return codeview::RegisterId::CVRegEAX;
+  return codeview::RegisterId::EAX;
 }
 
 uint32_t NativeRawSymbol::getLowerBoundId() const {
@@ -248,7 +249,7 @@ uint32_t NativeRawSymbol::getRank() const {
 }
 
 codeview::RegisterId NativeRawSymbol::getRegisterId() const {
-  return codeview::RegisterId::CVRegEAX;
+  return codeview::RegisterId::EAX;
 }
 
 uint32_t NativeRawSymbol::getRegisterType() const {
@@ -374,9 +375,7 @@ PDB_DataKind NativeRawSymbol::getDataKind() const {
   return PDB_DataKind::Unknown;
 }
 
-PDB_SymType NativeRawSymbol::getSymTag() const {
-  return PDB_SymType::None;
-}
+PDB_SymType NativeRawSymbol::getSymTag() const { return Tag; }
 
 codeview::GUID NativeRawSymbol::getGuid() const { return codeview::GUID{{0}}; }
 

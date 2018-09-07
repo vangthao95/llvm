@@ -337,7 +337,7 @@ private:
   StringRef parseStringToComma();
 
   bool parseAssignment(StringRef Name, bool allow_redef,
-                       bool NoDeadStrip = false, bool AllowExtendedExpr = false);
+                       bool NoDeadStrip = false);
 
   unsigned getBinOpPrecedence(AsmToken::TokenKind K,
                               MCBinaryExpr::Opcode &Kind);
@@ -467,6 +467,7 @@ private:
     DK_CV_INLINE_LINETABLE,
     DK_CV_DEF_RANGE,
     DK_CV_STRINGTABLE,
+    DK_CV_STRING,
     DK_CV_FILECHECKSUMS,
     DK_CV_FILECHECKSUM_OFFSET,
     DK_CV_FPO_DATA,
@@ -506,6 +507,8 @@ private:
     DK_ERROR,
     DK_WARNING,
     DK_PRINT,
+    DK_ADDRSIG,
+    DK_ADDRSIG_SYM,
     DK_END
   };
 
@@ -536,7 +539,7 @@ private:
   bool parseDirectiveStabs();
 
   // ".cv_file", ".cv_func_id", ".cv_inline_site_id", ".cv_loc", ".cv_linetable",
-  // ".cv_inline_linetable", ".cv_def_range"
+  // ".cv_inline_linetable", ".cv_def_range", ".cv_string"
   bool parseDirectiveCVFile();
   bool parseDirectiveCVFuncId();
   bool parseDirectiveCVInlineSiteId();
@@ -544,6 +547,7 @@ private:
   bool parseDirectiveCVLinetable();
   bool parseDirectiveCVInlineLinetable();
   bool parseDirectiveCVDefRange();
+  bool parseDirectiveCVString();
   bool parseDirectiveCVStringTable();
   bool parseDirectiveCVFileChecksums();
   bool parseDirectiveCVFileChecksumOffset();
@@ -654,6 +658,10 @@ private:
   // .print <double-quotes-string>
   bool parseDirectivePrint(SMLoc DirectiveLoc);
 
+  // Directives to support address-significance tables.
+  bool parseDirectiveAddrsig();
+  bool parseDirectiveAddrsigSym();
+
   void initializeDirectiveKindMap();
 };
 
@@ -696,8 +704,7 @@ AsmParser::AsmParser(SourceMgr &SM, MCContext &Ctx, MCStreamer &Out,
   case MCObjectFileInfo::IsWasm:
     // TODO: WASM will need its own MCAsmParserExtension implementation, but
     // for now we can re-use the ELF one, since the directives can be the
-    // same for now, and this makes the -triple=wasm32-unknown-unknown-wasm
-    // path work.
+    // same for now.
     PlatformParser.reset(createELFAsmParser());
     break;
   }
@@ -1358,7 +1365,8 @@ void AsmParser::altMacroString(StringRef AltMacroStr,std::string &Res) {
 bool AsmParser::parseExpression(const MCExpr *&Res, SMLoc &EndLoc) {
   // Parse the expression.
   Res = nullptr;
-  if (parsePrimaryExpr(Res, EndLoc) || parseBinOpRHS(1, Res, EndLoc))
+  if (getTargetParser().parsePrimaryExpr(Res, EndLoc) ||
+      parseBinOpRHS(1, Res, EndLoc))
     return true;
 
   // As a special case, we support 'a op b @ modifier' by rewriting the
@@ -1612,7 +1620,7 @@ bool AsmParser::parseBinOpRHS(unsigned Precedence, const MCExpr *&Res,
 
     // Eat the next primary expression.
     const MCExpr *RHS;
-    if (parsePrimaryExpr(RHS, EndLoc))
+    if (getTargetParser().parsePrimaryExpr(RHS, EndLoc))
       return true;
 
     // If BinOp binds less tightly with RHS than the operator after RHS, let
@@ -1821,7 +1829,7 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
     // identifier '=' ... -> assignment statement
     Lex();
 
-    return parseAssignment(IDVal, true, /*NoDeadStrip*/ false, /*AllowExtendedExpr*/true);
+    return parseAssignment(IDVal, true);
 
   default: // Normal instruction or directive.
     break;
@@ -1836,7 +1844,7 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
   // Otherwise, we have a normal instruction or directive.
 
   // Directives start with "."
-  if (IDVal[0] == '.' && IDVal != ".") {
+  if (IDVal.startswith(".") && IDVal != ".") {
     // There are several entities interested in parsing directives:
     //
     // 1. The target-specific assembly parser. Some directives are target
@@ -2023,6 +2031,8 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
       return parseDirectiveCVInlineLinetable();
     case DK_CV_DEF_RANGE:
       return parseDirectiveCVDefRange();
+    case DK_CV_STRING:
+      return parseDirectiveCVString();
     case DK_CV_STRINGTABLE:
       return parseDirectiveCVStringTable();
     case DK_CV_FILECHECKSUMS:
@@ -2128,6 +2138,10 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
       return parseDirectiveDS(IDVal, 12);
     case DK_PRINT:
       return parseDirectivePrint(IDLoc);
+    case DK_ADDRSIG:
+      return parseDirectiveAddrsig();
+    case DK_ADDRSIG_SYM:
+      return parseDirectiveAddrsigSym();
     }
 
     return Error(IDLoc, "unknown directive");
@@ -2757,11 +2771,11 @@ void AsmParser::handleMacroExit() {
 }
 
 bool AsmParser::parseAssignment(StringRef Name, bool allow_redef,
-                                bool NoDeadStrip, bool AllowExtendedExpr) {
+                                bool NoDeadStrip) {
   MCSymbol *Sym;
   const MCExpr *Value;
   if (MCParserUtils::parseAssignmentExpression(Name, allow_redef, *this, Sym,
-                                               Value, AllowExtendedExpr))
+                                               Value))
     return true;
 
   if (!Sym) {
@@ -3338,17 +3352,17 @@ bool AsmParser::parseDirectiveFile(SMLoc DirectiveLoc) {
     }
   }
 
-  // In case there is a -g option as well as debug info from directive .file,
-  // we turn off the -g option, directly use the existing debug info instead.
-  // Also reset any implicit ".file 0" for the assembler source.
-  if (Ctx.getGenDwarfForAssembly()) {
-    Ctx.getMCDwarfLineTable(0).resetRootFile();
-    Ctx.setGenDwarfForAssembly(false);
-  }
-
   if (FileNumber == -1)
     getStreamer().EmitFileDirective(Filename);
   else {
+    // In case there is a -g option as well as debug info from directive .file,
+    // we turn off the -g option, directly use the existing debug info instead.
+    // Also reset any implicit ".file 0" for the assembler source.
+    if (Ctx.getGenDwarfForAssembly()) {
+      Ctx.getMCDwarfLineTable(0).resetRootFile();
+      Ctx.setGenDwarfForAssembly(false);
+    }
+
     MD5::MD5Result *CKMem = nullptr;
     if (HasMD5) {
       CKMem = (MD5::MD5Result *)Ctx.allocate(sizeof(MD5::MD5Result), 1);
@@ -3800,6 +3814,20 @@ bool AsmParser::parseDirectiveCVDefRange() {
     return true;
 
   getStreamer().EmitCVDefRangeDirective(Ranges, FixedSizePortion);
+  return false;
+}
+
+/// parseDirectiveCVString
+/// ::= .cv_stringtable "string"
+bool AsmParser::parseDirectiveCVString() {
+  std::string Data;
+  if (checkForValidSection() || parseEscapedString(Data))
+    return addErrorSuffix(" in '.cv_string' directive");
+
+  // Put the string in the table and emit the offset.
+  std::pair<StringRef, unsigned> Insertion =
+      getCVContext().addToStringTable(Data);
+  getStreamer().EmitIntValue(Insertion.second, 4);
   return false;
 }
 
@@ -5228,6 +5256,7 @@ void AsmParser::initializeDirectiveKindMap() {
   DirectiveKindMap[".cv_inline_linetable"] = DK_CV_INLINE_LINETABLE;
   DirectiveKindMap[".cv_inline_site_id"] = DK_CV_INLINE_SITE_ID;
   DirectiveKindMap[".cv_def_range"] = DK_CV_DEF_RANGE;
+  DirectiveKindMap[".cv_string"] = DK_CV_STRING;
   DirectiveKindMap[".cv_stringtable"] = DK_CV_STRINGTABLE;
   DirectiveKindMap[".cv_filechecksums"] = DK_CV_FILECHECKSUMS;
   DirectiveKindMap[".cv_filechecksumoffset"] = DK_CV_FILECHECKSUM_OFFSET;
@@ -5292,6 +5321,8 @@ void AsmParser::initializeDirectiveKindMap() {
   DirectiveKindMap[".ds.w"] = DK_DS_W;
   DirectiveKindMap[".ds.x"] = DK_DS_X;
   DirectiveKindMap[".print"] = DK_PRINT;
+  DirectiveKindMap[".addrsig"] = DK_ADDRSIG;
+  DirectiveKindMap[".addrsig_sym"] = DK_ADDRSIG_SYM;
 }
 
 MCAsmMacro *AsmParser::parseMacroLikeBody(SMLoc DirectiveLoc) {
@@ -5306,7 +5337,8 @@ MCAsmMacro *AsmParser::parseMacroLikeBody(SMLoc DirectiveLoc) {
     }
 
     if (Lexer.is(AsmToken::Identifier) &&
-        (getTok().getIdentifier() == ".rept" ||
+        (getTok().getIdentifier() == ".rep" ||
+         getTok().getIdentifier() == ".rept" ||
          getTok().getIdentifier() == ".irp" ||
          getTok().getIdentifier() == ".irpc")) {
       ++NestLevel;
@@ -5528,6 +5560,21 @@ bool AsmParser::parseDirectivePrint(SMLoc DirectiveLoc) {
   if (parseToken(AsmToken::EndOfStatement, "expected end of statement"))
     return true;
   llvm::outs() << StrTok.getStringContents() << '\n';
+  return false;
+}
+
+bool AsmParser::parseDirectiveAddrsig() {
+  getStreamer().EmitAddrsig();
+  return false;
+}
+
+bool AsmParser::parseDirectiveAddrsigSym() {
+  StringRef Name;
+  if (check(parseIdentifier(Name),
+            "expected identifier in '.addrsig_sym' directive"))
+    return true;
+  MCSymbol *Sym = getContext().getOrCreateSymbol(Name);
+  getStreamer().EmitAddrsigSym(Sym);
   return false;
 }
 
@@ -5812,17 +5859,12 @@ static bool isSymbolUsedInExpression(const MCSymbol *Sym, const MCExpr *Value) {
 
 bool parseAssignmentExpression(StringRef Name, bool allow_redef,
                                MCAsmParser &Parser, MCSymbol *&Sym,
-                               const MCExpr *&Value, bool AllowExtendedExpr) {
+                               const MCExpr *&Value) {
 
   // FIXME: Use better location, we should use proper tokens.
   SMLoc EqualLoc = Parser.getTok().getLoc();
-  SMLoc EndLoc;
-  if (AllowExtendedExpr) {
-    if (Parser.getTargetParser().parseAssignmentExpression(Value, EndLoc)) {
-      return Parser.TokError("missing expression");
-    }
-  } else if (Parser.parseExpression(Value, EndLoc))
-      return Parser.TokError("missing expression");
+  if (Parser.parseExpression(Value))
+    return Parser.TokError("missing expression");
 
   // Note: we don't count b as used in "a = b". This is to allow
   // a = b

@@ -1260,8 +1260,8 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
     break;
   }
   case Instruction::Select: {
-    APInt LeftDemanded(DemandedElts), RightDemanded(DemandedElts);
-    if (ConstantVector* CV = dyn_cast<ConstantVector>(I->getOperand(0))) {
+    APInt DemandedLHS(DemandedElts), DemandedRHS(DemandedElts);
+    if (auto *CV = dyn_cast<ConstantVector>(I->getOperand(0))) {
       for (unsigned i = 0; i < VWidth; i++) {
         Constant *CElt = CV->getAggregateElement(i);
         // Method isNullValue always returns false when called on a
@@ -1270,22 +1270,26 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
         if (isa<ConstantExpr>(CElt))
           continue;
         if (CElt->isNullValue())
-          LeftDemanded.clearBit(i);
+          DemandedLHS.clearBit(i);
         else
-          RightDemanded.clearBit(i);
+          DemandedRHS.clearBit(i);
       }
     }
 
-    TmpV = SimplifyDemandedVectorElts(I->getOperand(1), LeftDemanded, UndefElts,
-                                      Depth + 1);
-    if (TmpV) { I->setOperand(1, TmpV); MadeChange = true; }
+    if (Value *V = SimplifyDemandedVectorElts(I->getOperand(1), DemandedLHS,
+                                              UndefElts2, Depth + 1)) {
+      I->setOperand(1, V);
+      MadeChange = true;
+    }
 
-    TmpV = SimplifyDemandedVectorElts(I->getOperand(2), RightDemanded,
-                                      UndefElts2, Depth + 1);
-    if (TmpV) { I->setOperand(2, TmpV); MadeChange = true; }
+    if (Value *V = SimplifyDemandedVectorElts(I->getOperand(2), DemandedRHS,
+                                              UndefElts3, Depth + 1)) {
+      I->setOperand(2, V);
+      MadeChange = true;
+    }
 
-    // Output elements are undefined if both are undefined.
-    UndefElts &= UndefElts2;
+    // Output elements are undefined if the element from each arm is undefined.
+    UndefElts = UndefElts2 & UndefElts3;
     break;
   }
   case Instruction::BitCast: {
@@ -1497,10 +1501,6 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
     case Intrinsic::x86_avx512_mask_sub_sd_round:
     case Intrinsic::x86_avx512_mask_max_sd_round:
     case Intrinsic::x86_avx512_mask_min_sd_round:
-    case Intrinsic::x86_avx512_mask_vfmadd_ss:
-    case Intrinsic::x86_avx512_mask_vfmadd_sd:
-    case Intrinsic::x86_avx512_maskz_vfmadd_ss:
-    case Intrinsic::x86_avx512_maskz_vfmadd_sd:
       TmpV = SimplifyDemandedVectorElts(II->getArgOperand(0), DemandedElts,
                                         UndefElts, Depth + 1);
       if (TmpV) { II->setArgOperand(0, TmpV); MadeChange = true; }
@@ -1519,39 +1519,6 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
       TmpV = SimplifyDemandedVectorElts(II->getArgOperand(2), DemandedElts,
                                         UndefElts3, Depth + 1);
       if (TmpV) { II->setArgOperand(2, TmpV); MadeChange = true; }
-
-      // Lower element is undefined if all three lower elements are undefined.
-      // Consider things like undef&0.  The result is known zero, not undef.
-      if (!UndefElts2[0] || !UndefElts3[0])
-        UndefElts.clearBit(0);
-
-      break;
-
-    case Intrinsic::x86_avx512_mask3_vfmadd_ss:
-    case Intrinsic::x86_avx512_mask3_vfmadd_sd:
-    case Intrinsic::x86_avx512_mask3_vfmsub_ss:
-    case Intrinsic::x86_avx512_mask3_vfmsub_sd:
-    case Intrinsic::x86_avx512_mask3_vfnmsub_ss:
-    case Intrinsic::x86_avx512_mask3_vfnmsub_sd:
-      // These intrinsics get the passthru bits from operand 2.
-      TmpV = SimplifyDemandedVectorElts(II->getArgOperand(2), DemandedElts,
-                                        UndefElts, Depth + 1);
-      if (TmpV) { II->setArgOperand(2, TmpV); MadeChange = true; }
-
-      // If lowest element of a scalar op isn't used then use Arg2.
-      if (!DemandedElts[0]) {
-        Worklist.Add(II);
-        return II->getArgOperand(2);
-      }
-
-      // Only lower element is used for operand 0 and 1.
-      DemandedElts = 1;
-      TmpV = SimplifyDemandedVectorElts(II->getArgOperand(0), DemandedElts,
-                                        UndefElts2, Depth + 1);
-      if (TmpV) { II->setArgOperand(0, TmpV); MadeChange = true; }
-      TmpV = SimplifyDemandedVectorElts(II->getArgOperand(1), DemandedElts,
-                                        UndefElts3, Depth + 1);
-      if (TmpV) { II->setArgOperand(1, TmpV); MadeChange = true; }
 
       // Lower element is undefined if all three lower elements are undefined.
       // Consider things like undef&0.  The result is known zero, not undef.

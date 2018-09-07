@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-//  This file declares LLVMContextImpl, the opaque implementation 
+//  This file declares LLVMContextImpl, the opaque implementation
 //  of LLVMContext.
 //
 //===----------------------------------------------------------------------===//
@@ -412,20 +412,22 @@ template <> struct MDNodeKeyImpl<DIBasicType> {
   uint64_t SizeInBits;
   uint32_t AlignInBits;
   unsigned Encoding;
+  unsigned Flags;
 
   MDNodeKeyImpl(unsigned Tag, MDString *Name, uint64_t SizeInBits,
-                uint32_t AlignInBits, unsigned Encoding)
+                uint32_t AlignInBits, unsigned Encoding, unsigned Flags)
       : Tag(Tag), Name(Name), SizeInBits(SizeInBits), AlignInBits(AlignInBits),
-        Encoding(Encoding) {}
+        Encoding(Encoding), Flags(Flags) {}
   MDNodeKeyImpl(const DIBasicType *N)
       : Tag(N->getTag()), Name(N->getRawName()), SizeInBits(N->getSizeInBits()),
-        AlignInBits(N->getAlignInBits()), Encoding(N->getEncoding()) {}
+        AlignInBits(N->getAlignInBits()), Encoding(N->getEncoding()), Flags(N->getFlags()) {}
 
   bool isKeyOf(const DIBasicType *RHS) const {
     return Tag == RHS->getTag() && Name == RHS->getRawName() &&
            SizeInBits == RHS->getSizeInBits() &&
            AlignInBits == RHS->getAlignInBits() &&
-           Encoding == RHS->getEncoding();
+           Encoding == RHS->getEncoding() &&
+           Flags == RHS->getFlags();
   }
 
   unsigned getHashValue() const {
@@ -1332,7 +1334,7 @@ public:
   /// OwnedModules - The set of modules instantiated in this context, and which
   /// will be automatically deleted if this context is deleted.
   SmallPtrSet<Module*, 4> OwnedModules;
-  
+
   LLVMContext::InlineAsmDiagHandlerTy InlineAsmDiagHandler = nullptr;
   void *InlineAsmDiagContext = nullptr;
 
@@ -1380,10 +1382,10 @@ public:
 
   using ArrayConstantsTy = ConstantUniqueMap<ConstantArray>;
   ArrayConstantsTy ArrayConstants;
-  
+
   using StructConstantsTy = ConstantUniqueMap<ConstantStruct>;
   StructConstantsTy StructConstants;
-  
+
   using VectorConstantsTy = ConstantUniqueMap<ConstantVector>;
   VectorConstantsTy VectorConstants;
 
@@ -1408,11 +1410,11 @@ public:
   Type VoidTy, LabelTy, HalfTy, FloatTy, DoubleTy, MetadataTy, TokenTy;
   Type X86_FP80Ty, FP128Ty, PPC_FP128Ty, X86_MMXTy;
   IntegerType Int1Ty, Int8Ty, Int16Ty, Int32Ty, Int64Ty, Int128Ty;
-  
+
   /// TypeAllocator - All dynamically allocated types are allocated from this.
   /// They live forever until the context is torn down.
   BumpPtrAllocator TypeAllocator;
-  
+
   DenseMap<unsigned, IntegerType*> IntegerTypes;
 
   using FunctionTypeSet = DenseSet<FunctionType *, FunctionTypeKeyInfo>;
@@ -1421,7 +1423,7 @@ public:
   StructTypeSet AnonStructTypes;
   StringMap<StructType*> NamedStructTypes;
   unsigned NamedStructTypesUniqueID = 0;
-    
+
   DenseMap<std::pair<Type *, uint64_t>, ArrayType*> ArrayTypes;
   DenseMap<std::pair<Type *, unsigned>, VectorType*> VectorTypes;
   DenseMap<Type*, PointerType*> PointerTypes;  // Pointers in AddrSpace = 0
@@ -1432,7 +1434,7 @@ public:
   /// whether or not a value has an entry in this map.
   using ValueHandlesTy = DenseMap<Value *, ValueHandleBase *>;
   ValueHandlesTy ValueHandles;
-  
+
   /// CustomMDKindNames - Map to hold the metadata string to ID mapping.
   StringMap<unsigned> CustomMDKindNames;
 

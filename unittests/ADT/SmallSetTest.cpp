@@ -123,3 +123,27 @@ TEST(SmallSetTest, IteratorString) {
   EXPECT_EQ("str 2", V[2]);
   EXPECT_EQ("str 4", V[3]);
 }
+
+TEST(SmallSetTest, IteratorIncMoveCopy) {
+  // Test SmallSetIterator for SmallSet with a type with non-trivial
+  // ctors/dtors.
+  SmallSet<std::string, 2> s1;
+
+  s1.insert("str 1");
+  s1.insert("str 2");
+
+  auto Iter = s1.begin();
+  EXPECT_EQ("str 1", *Iter);
+  ++Iter;
+  EXPECT_EQ("str 2", *Iter);
+
+  s1.insert("str 4");
+  s1.insert("str 0");
+  auto Iter2 = s1.begin();
+  Iter = std::move(Iter2);
+  EXPECT_EQ("str 0", *Iter);
+
+  auto Iter3 = s1.end();
+  Iter3 = Iter2;
+  EXPECT_EQ(Iter3, Iter2);
+}
