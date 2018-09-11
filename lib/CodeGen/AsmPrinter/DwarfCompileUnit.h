@@ -303,6 +303,12 @@ public:
   uint64_t getDWOId() const { return DWOId; }
   void setDWOId(uint64_t DwoId) { DWOId = DwoId; }
 
+  void constructDieLocation(DIE &Die, dwarf::Attribute Attribute,
+                            const DbgVariable &DV);
+  void constructDieLocationAddExpr(DIE &Die, dwarf::Attribute Attribute,
+                                   const DbgVariable &DV,
+                                   DIExpression *SubExpr);
+
   bool hasDwarfPubSections() const;
 };
 
