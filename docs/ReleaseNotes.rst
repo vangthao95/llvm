@@ -27,8 +27,8 @@ Non-comprehensive list of changes in this release
 * The Windows installer no longer includes a Visual Studio integration.
   Instead, a new
   `LLVM Compiler Toolchain Visual Studio extension <https://marketplace.visualstudio.com/items?itemName=LLVMExtensions.llvm-toolchain>`_
-  is available on the Visual Studio Marketplace. The new integration includes
-  support for Visual Studio 2017.
+  is available on the Visual Studio Marketplace. The new integration
+  supports Visual Studio 2017.
 
 * Libraries have been renamed from 7.0 to 7. This change also impacts
   downstream libraries like lldb.
@@ -116,6 +116,8 @@ Non-comprehensive list of changes in this release
 * The :program:`opt` tool now supports the ``-load-pass-plugin`` option for
   loading pass plugins for the new PassManager.
 
+* Support for profiling JITed code with perf.
+
 
 Changes to the LLVM IR
 ----------------------
@@ -134,7 +136,7 @@ Changes to the AArch64 Target
 * The ``.inst`` assembler directive is now usable on both COFF and Mach-O
   targets, in addition to ELF.
 
-* Support for most remaining COFF relocations have been added.
+* Support for most remaining COFF relocations has been added.
 
 * Support for TLS on Windows has been added.
 
@@ -277,6 +279,9 @@ Changes to the C API
   interface was made a deprecated no-op in LLVM 5. Use
   ``LLVMAddSLPVectorizePass`` instead to get the supported SLP vectorizer.
 
+* Expanded the OrcJIT APIs so they can register event listeners like debuggers
+  and profilers.
+
 Changes to the DAG infrastructure
 ---------------------------------
 * ``ADDC``/``ADDE``/``SUBC``/``SUBE`` are now deprecated and will default to expand. Backends
@@ -289,6 +294,22 @@ Changes to the DAG infrastructure
 * TableGen now supports multi-alternative pattern fragments via the ``PatFrags``
   class.  ``PatFrag`` is now derived from ``PatFrags``, which may require minor
   changes to backends that directly access ``PatFrag`` members.
+
+
+External Open Source Projects Using LLVM 7
+==========================================
+
+Zig Programming Language
+------------------------
+
+`Zig <https://ziglang.org>`_  is an open-source programming language designed
+for robustness, optimality, and clarity. Zig is an alternative to C, providing
+high level features such as generics, compile time function execution, partial
+evaluation, and LLVM-based coroutines, while exposing low level LLVM IR
+features such as aliases and intrinsics. Zig uses Clang to provide automatic
+import of .h symbols - even inline functions and macros. Zig uses LLD combined
+with lazily building compiler-rt to provide out-of-the-box cross-compiling for
+all supported targets.
 
 
 Additional Information
