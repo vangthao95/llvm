@@ -229,6 +229,7 @@ public:
     case DILexicalBlockKind:
     case DILexicalBlockFileKind:
     case DINamespaceKind:
+    case DICommonBlockKind:
     case DITemplateTypeParameterKind:
     case DITemplateValueParameterKind:
     case DIGlobalVariableKind:
@@ -528,6 +529,7 @@ public:
     case DILexicalBlockKind:
     case DILexicalBlockFileKind:
     case DINamespaceKind:
+    case DICommonBlockKind:
     case DIModuleKind:
       return true;
     }
@@ -2650,6 +2652,68 @@ public:
 
   static bool classof(const Metadata *MD) {
     return MD->getMetadataID() == DIGlobalVariableKind;
+  }
+};
+
+class DICommonBlock : public DIScope {
+  unsigned LineNo;
+  uint32_t AlignInBits;
+
+  friend class LLVMContextImpl;
+  friend class MDNode;
+
+  DICommonBlock(LLVMContext &Context, StorageType Storage, unsigned LineNo,
+                uint32_t AlignInBits, ArrayRef<Metadata *> Ops)
+      : DIScope(Context, DICommonBlockKind, Storage, dwarf::DW_TAG_common_block,
+                Ops), LineNo(LineNo), AlignInBits(AlignInBits) {}
+  ~DICommonBlock() = default;
+
+  static DICommonBlock *getImpl(LLVMContext &Context, DIScope *Scope,
+                                DIGlobalVariable *Decl, StringRef Name,
+                                DIFile *File, unsigned LineNo,
+                                uint32_t AlignInBits, StorageType Storage,
+                                bool ShouldCreate = true) {
+    return getImpl(Context, Scope, Decl, getCanonicalMDString(Context, Name),
+                   File, LineNo, AlignInBits, Storage, ShouldCreate);
+  }
+  static DICommonBlock *getImpl(LLVMContext &Context, Metadata *Scope,
+                                Metadata *Decl, MDString *Name, Metadata *File,
+                                unsigned LineNo, uint32_t AlignInBits,
+                                StorageType Storage, bool ShouldCreate = true);
+
+  TempDICommonBlock cloneImpl() const {
+    return getTemporary(getContext(), getScope(), getDecl(), getName(),
+                        getFile(), getLineNo(), getAlignInBits());
+  }
+
+public:
+  DEFINE_MDNODE_GET(DICommonBlock,
+                    (DIScope *Scope, DIGlobalVariable *Decl, StringRef Name,
+                     DIFile *File, unsigned LineNo, uint32_t AlignInBits),
+                    (Scope, Decl, Name, File, LineNo, AlignInBits))
+  DEFINE_MDNODE_GET(DICommonBlock,
+                    (Metadata *Scope, Metadata *Decl, MDString *Name,
+                     Metadata *File, unsigned LineNo, uint32_t AlignInBits),
+                    (Scope, Decl, Name, File, LineNo, AlignInBits))
+
+  TempDICommonBlock clone() const { return cloneImpl(); }
+
+  DIScope *getScope() const { return cast_or_null<DIScope>(getRawScope()); }
+  DIGlobalVariable *getDecl() const {
+    return cast_or_null<DIGlobalVariable>(getRawDecl());
+  }
+  StringRef getName() const { return getStringOperand(2); }
+  DIFile *getFile() const { return cast_or_null<DIFile>(getRawFile()); }
+  unsigned getLineNo() const { return LineNo; }
+  uint32_t getAlignInBits() const { return AlignInBits; }
+
+  Metadata *getRawScope() const { return getOperand(0); }
+  Metadata *getRawDecl() const { return getOperand(1); }
+  MDString *getRawName() const { return getOperandAs<MDString>(2); }
+  Metadata *getRawFile() const { return getOperand(3); }
+
+  static bool classof(const Metadata *MD) {
+    return MD->getMetadataID() == DICommonBlockKind;
   }
 };
 
