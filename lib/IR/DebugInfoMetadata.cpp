@@ -160,6 +160,9 @@ DIScopeRef DIScope::getScope() const {
   if (auto *NS = dyn_cast<DINamespace>(this))
     return NS->getScope();
 
+  if (auto *CB = dyn_cast<DICommonBlock>(this))
+    return CB->getScope();
+
   if (auto *M = dyn_cast<DIModule>(this))
     return M->getScope();
 
@@ -175,6 +178,8 @@ StringRef DIScope::getName() const {
     return SP->getName();
   if (auto *NS = dyn_cast<DINamespace>(this))
     return NS->getName();
+  if (auto *CB = dyn_cast<DICommonBlock>(this))
+    return CB->getName();
   if (auto *M = dyn_cast<DIModule>(this))
     return M->getName();
   assert((isa<DILexicalBlockBase>(this) || isa<DIFile>(this) ||
@@ -611,6 +616,19 @@ DINamespace *DINamespace::getImpl(LLVMContext &Context, Metadata *Scope,
   // The nullptr is for DIScope's File operand. This should be refactored.
   Metadata *Ops[] = {nullptr, Scope, Name};
   DEFINE_GETIMPL_STORE(DINamespace, (ExportSymbols), Ops);
+}
+
+DICommonBlock *DICommonBlock::getImpl(LLVMContext &Context, Metadata *Scope,
+                                      Metadata *Decl, MDString *Name,
+                                      Metadata *File, unsigned LineNo,
+                                      uint32_t AlignInBits,
+                                      StorageType Storage, bool ShouldCreate) {
+  assert(isCanonical(Name) && "Expected canonical MDString");
+  DEFINE_GETIMPL_LOOKUP(DICommonBlock, (Scope, Decl, Name, File, LineNo,
+                                        AlignInBits));
+  // The nullptr is for DIScope's File operand. This should be refactored.
+  Metadata *Ops[] = {Scope, Decl, Name, File};
+  DEFINE_GETIMPL_STORE(DICommonBlock, (LineNo, AlignInBits), Ops);
 }
 
 DIModule *DIModule::getImpl(LLVMContext &Context, Metadata *Scope,

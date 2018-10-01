@@ -819,6 +819,7 @@ MetadataLoader::MetadataLoaderImpl::lazyLoadModuleMetadataBlock() {
       case bitc::METADATA_LEXICAL_BLOCK:
       case bitc::METADATA_LEXICAL_BLOCK_FILE:
       case bitc::METADATA_NAMESPACE:
+      case bitc::METADATA_COMMON_BLOCK:
       case bitc::METADATA_MACRO:
       case bitc::METADATA_MACRO_FILE:
       case bitc::METADATA_TEMPLATE_TYPE:
@@ -1544,6 +1545,17 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
         GET_OR_DISTINCT(DILexicalBlockFile,
                         (Context, getMDOrNull(Record[1]),
                          getMDOrNull(Record[2]), Record[3])),
+        NextMetadataNo);
+    NextMetadataNo++;
+    break;
+  }
+  case bitc::METADATA_COMMON_BLOCK: {
+    IsDistinct = Record[0] & 1;
+    MetadataList.assignValue(
+        GET_OR_DISTINCT(DICommonBlock,
+                        (Context, getMDOrNull(Record[1]),
+                         getMDOrNull(Record[2]), getMDString(Record[3]),
+                         getMDOrNull(Record[4]), Record[5], Record[6])),
         NextMetadataNo);
     NextMetadataNo++;
     break;
