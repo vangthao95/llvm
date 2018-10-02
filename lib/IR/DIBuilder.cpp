@@ -825,6 +825,13 @@ DISubprogram *DIBuilder::createMethod(
   return SP;
 }
 
+DICommonBlock *DIBuilder::createCommonBlock(
+    DIScope *Scope, DIGlobalVariable *Decl, StringRef Name, DIFile *File,
+    unsigned LineNo, uint32_t AlignInBits) {
+  return DICommonBlock::get(
+      VMContext, Scope, Decl, Name, File, LineNo, AlignInBits);
+}
+
 DINamespace *DIBuilder::createNameSpace(DIScope *Scope, StringRef Name,
                                         bool ExportSymbols) {
 
