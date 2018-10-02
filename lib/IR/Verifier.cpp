@@ -1118,6 +1118,14 @@ void Verifier::visitDILexicalBlockFile(const DILexicalBlockFile &N) {
   visitDILexicalBlockBase(N);
 }
 
+void Verifier::visitDICommonBlock(const DICommonBlock &N) {
+  AssertDI(N.getTag() == dwarf::DW_TAG_common_block, "invalid tag", &N);
+  if (auto *S = N.getRawScope())
+    AssertDI(isa<DIScope>(S), "invalid scope ref", &N, S);
+  if (auto *S = N.getRawDecl())
+    AssertDI(isa<DIGlobalVariable>(S), "invalid declaration", &N, S);
+}
+
 void Verifier::visitDINamespace(const DINamespace &N) {
   AssertDI(N.getTag() == dwarf::DW_TAG_namespace, "invalid tag", &N);
   if (auto *S = N.getRawScope())
