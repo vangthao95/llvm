@@ -34,6 +34,10 @@ HANDLE_DI_FLAG((1 << 11), Vector)
 HANDLE_DI_FLAG((1 << 12), StaticMember)
 HANDLE_DI_FLAG((1 << 13), LValueReference)
 HANDLE_DI_FLAG((1 << 14), RValueReference)
+// Fortran flags
+HANDLE_DI_FLAG((1 << 13), Pure)
+HANDLE_DI_FLAG((1 << 14), Elemental)
+HANDLE_DI_FLAG((1 << 15), Recursive)
 // 15 was formerly ExternalTypeRef, but this was never used.
 HANDLE_DI_FLAG((1 << 15), Reserved)
 HANDLE_DI_FLAG((1 << 16), SingleInheritance)
@@ -50,9 +54,7 @@ HANDLE_DI_FLAG((1 << 25), Thunk)
 HANDLE_DI_FLAG((1 << 26), Trivial)
 HANDLE_DI_FLAG((1 << 27), BigEndian)
 HANDLE_DI_FLAG((1 << 28), LittleEndian)
-HANDLE_DI_FLAG((1 << 29), Pure)
-HANDLE_DI_FLAG((1 << 30), Elemental)
-HANDLE_DI_FLAG((1u << 31), Recursive)
+HANDLE_DI_FLAG((1 << 29), AllCallsDescribed)
 
 // To avoid needing a dedicated value for IndirectVirtualBase, we use
 // the bitwise or of Virtual and FwdDecl, which does not otherwise
@@ -62,7 +64,7 @@ HANDLE_DI_FLAG((1 << 2) | (1 << 5), IndirectVirtualBase)
 #ifdef DI_FLAG_LARGEST_NEEDED
 // intended to be used with ADT/BitmaskEnum.h
 // NOTE: always must be equal to largest flag, check this when adding new flag
-HANDLE_DI_FLAG((1u << 31), Largest)
+HANDLE_DI_FLAG((1 << 29), Largest)
 #undef DI_FLAG_LARGEST_NEEDED
 #endif
 
