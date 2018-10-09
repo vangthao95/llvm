@@ -3172,6 +3172,12 @@ void Verifier::visitGetElementPtrInst(GetElementPtrInst &GEP) {
              "All GEP indices should be of integer type");
     }
   }
+
+  if (auto *PTy = dyn_cast<PointerType>(GEP.getType())) {
+    Assert(GEP.getAddressSpace() == PTy->getAddressSpace(),
+           "GEP address space doesn't match type", &GEP);
+  }
+
   visitInstruction(GEP);
 }
 
