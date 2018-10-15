@@ -70,6 +70,7 @@ bool llvm::isTriviallyVectorizable(Intrinsic::ID ID) {
   case Intrinsic::ctlz:
   case Intrinsic::cttz:
   case Intrinsic::powi:
+  case Intrinsic::canonicalize:
     return true;
   default:
     return false;
@@ -279,9 +280,10 @@ Value *llvm::findScalarElement(Value *V, unsigned EltNo) {
   }
 
   // Extract a value from a vector add operation with a constant zero.
-  Value *Val = nullptr; Constant *Con = nullptr;
-  if (match(V, m_Add(m_Value(Val), m_Constant(Con))))
-    if (Constant *Elt = Con->getAggregateElement(EltNo))
+  // TODO: Use getBinOpIdentity() to generalize this.
+  Value *Val; Constant *C;
+  if (match(V, m_Add(m_Value(Val), m_Constant(C))))
+    if (Constant *Elt = C->getAggregateElement(EltNo))
       if (Elt->isNullValue())
         return findScalarElement(Val, EltNo);
 
@@ -710,7 +712,9 @@ void InterleavedAccessInfo::analyzeInterleaving() {
     // create a group for B, we continue with the bottom-up algorithm to ensure
     // we don't break any of B's dependences.
     InterleaveGroup *Group = nullptr;
-    if (isStrided(DesB.Stride)) {
+    // TODO: Ignore B if it is in a predicated block. This restriction can be 
+    // relaxed in the future once we handle masked interleaved groups.
+    if (isStrided(DesB.Stride) && !isPredicated(B->getParent())) {
       Group = getInterleaveGroup(B);
       if (!Group) {
         LLVM_DEBUG(dbgs() << "LV: Creating an interleave group with:" << *B

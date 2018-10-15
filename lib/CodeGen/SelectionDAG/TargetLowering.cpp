@@ -55,10 +55,12 @@ bool TargetLowering::isInTailCallPosition(SelectionDAG &DAG, SDNode *Node,
   const Function &F = DAG.getMachineFunction().getFunction();
 
   // Conservatively require the attributes of the call to match those of
-  // the return. Ignore noalias because it doesn't affect the call sequence.
+  // the return. Ignore NoAlias and NonNull because they don't affect the
+  // call sequence.
   AttributeList CallerAttrs = F.getAttributes();
   if (AttrBuilder(CallerAttrs, AttributeList::ReturnIndex)
           .removeAttribute(Attribute::NoAlias)
+          .removeAttribute(Attribute::NonNull)
           .hasAttributes())
     return false;
 
@@ -571,6 +573,17 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
       Known.Zero &= Known2.Zero;
     }
     return false;   // Don't fall through, will infinitely loop.
+  case ISD::CONCAT_VECTORS:
+    Known.Zero.setAllBits();
+    Known.One.setAllBits();
+    for (SDValue SrcOp : Op->ops()) {
+      if (SimplifyDemandedBits(SrcOp, NewMask, Known2, TLO, Depth + 1))
+        return true;
+      // Known bits are the values that are shared by every subvector.
+      Known.One &= Known2.One;
+      Known.Zero &= Known2.Zero;
+    }
+    break;
   case ISD::AND:
     // If the RHS is a constant, check to see if the LHS would be zero without
     // using the bits from the RHS.  Below, we use knowledge about the RHS to
@@ -1102,6 +1115,25 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
                                                Op.getOperand(0)));
     break;
   }
+  case ISD::SIGN_EXTEND_VECTOR_INREG: {
+    // TODO - merge this with SIGN_EXTEND above?
+    SDValue Src = Op.getOperand(0);
+    unsigned InBits = Src.getValueType().getScalarSizeInBits();
+
+    APInt InDemandedBits = NewMask.trunc(InBits);
+
+    // If some of the sign extended bits are demanded, we know that the sign
+    // bit is demanded.
+    if (InBits < NewMask.getActiveBits())
+      InDemandedBits.setBit(InBits - 1);
+
+    if (SimplifyDemandedBits(Src, InDemandedBits, Known, TLO, Depth + 1))
+      return true;
+    assert(!Known.hasConflict() && "Bits known to be one AND zero?");
+    // If the sign bit is known one, the top bits match.
+    Known = Known.sext(BitWidth);
+    break;
+  }
   case ISD::ANY_EXTEND: {
     unsigned OperandBitWidth = Op.getOperand(0).getScalarValueSizeInBits();
     APInt InMask = NewMask.trunc(OperandBitWidth);
@@ -1177,29 +1209,64 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
     Known.Zero |= ~InMask;
     break;
   }
-  case ISD::BITCAST:
+  case ISD::BITCAST: {
+    SDValue Src = Op.getOperand(0);
+    EVT SrcVT = Src.getValueType();
+    unsigned NumSrcEltBits = SrcVT.getScalarSizeInBits();
+
     // If this is an FP->Int bitcast and if the sign bit is the only
     // thing demanded, turn this into a FGETSIGN.
-    if (!TLO.LegalOperations() && !VT.isVector() &&
-        !Op.getOperand(0).getValueType().isVector() &&
+    if (!TLO.LegalOperations() && !VT.isVector() && !SrcVT.isVector() &&
         NewMask == APInt::getSignMask(Op.getValueSizeInBits()) &&
-        Op.getOperand(0).getValueType().isFloatingPoint()) {
+        SrcVT.isFloatingPoint()) {
       bool OpVTLegal = isOperationLegalOrCustom(ISD::FGETSIGN, VT);
-      bool i32Legal  = isOperationLegalOrCustom(ISD::FGETSIGN, MVT::i32);
-      if ((OpVTLegal || i32Legal) && VT.isSimple() &&
-           Op.getOperand(0).getValueType() != MVT::f16 &&
-           Op.getOperand(0).getValueType() != MVT::f128) {
+      bool i32Legal = isOperationLegalOrCustom(ISD::FGETSIGN, MVT::i32);
+      if ((OpVTLegal || i32Legal) && VT.isSimple() && SrcVT != MVT::f16 &&
+          SrcVT != MVT::f128) {
         // Cannot eliminate/lower SHL for f128 yet.
         EVT Ty = OpVTLegal ? VT : MVT::i32;
         // Make a FGETSIGN + SHL to move the sign bit into the appropriate
         // place.  We expect the SHL to be eliminated by other optimizations.
-        SDValue Sign = TLO.DAG.getNode(ISD::FGETSIGN, dl, Ty, Op.getOperand(0));
+        SDValue Sign = TLO.DAG.getNode(ISD::FGETSIGN, dl, Ty, Src);
         unsigned OpVTSizeInBits = Op.getValueSizeInBits();
         if (!OpVTLegal && OpVTSizeInBits > 32)
           Sign = TLO.DAG.getNode(ISD::ZERO_EXTEND, dl, VT, Sign);
         unsigned ShVal = Op.getValueSizeInBits() - 1;
         SDValue ShAmt = TLO.DAG.getConstant(ShVal, dl, VT);
-        return TLO.CombineTo(Op, TLO.DAG.getNode(ISD::SHL, dl, VT, Sign, ShAmt));
+        return TLO.CombineTo(Op,
+                             TLO.DAG.getNode(ISD::SHL, dl, VT, Sign, ShAmt));
+      }
+    }
+    // If bitcast from a vector and the mask covers entire elements, see if we
+    // can use SimplifyDemandedVectorElts.
+    // TODO - bigendian once we have test coverage.
+    // TODO - bool vectors once SimplifyDemandedVectorElts has SETCC support.
+    if (SrcVT.isVector() && NumSrcEltBits > 1 &&
+        (BitWidth % NumSrcEltBits) == 0 &&
+        TLO.DAG.getDataLayout().isLittleEndian()) {
+      unsigned Scale = BitWidth / NumSrcEltBits;
+      auto GetDemandedSubMask = [&](APInt &DemandedSubElts) -> bool {
+        DemandedSubElts = APInt::getNullValue(Scale);
+        for (unsigned i = 0; i != Scale; ++i) {
+          unsigned Offset = i * NumSrcEltBits;
+          APInt Sub = NewMask.extractBits(NumSrcEltBits, Offset);
+          if (Sub.isAllOnesValue())
+            DemandedSubElts.setBit(i);
+          else if (!Sub.isNullValue())
+            return false;
+        }
+        return true;
+      };
+
+      APInt DemandedSubElts;
+      if (GetDemandedSubMask(DemandedSubElts)) {
+        unsigned NumSrcElts = SrcVT.getVectorNumElements();
+        APInt DemandedElts = APInt::getSplat(NumSrcElts, DemandedSubElts);
+
+        APInt KnownUndef, KnownZero;
+        if (SimplifyDemandedVectorElts(Src, DemandedElts, KnownUndef, KnownZero,
+                                       TLO, Depth + 1))
+          return true;
       }
     }
     // If this is a bitcast, let computeKnownBits handle it.  Only do this on a
@@ -1209,6 +1276,7 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
       return false;
     }
     break;
+  }
   case ISD::ADD:
   case ISD::MUL:
   case ISD::SUB: {
@@ -4153,7 +4221,8 @@ TargetLowering::expandUnalignedLoad(LoadSDNode *LD, SelectionDAG &DAG) const {
   if (VT.isFloatingPoint() || VT.isVector()) {
     EVT intVT = EVT::getIntegerVT(*DAG.getContext(), LoadedVT.getSizeInBits());
     if (isTypeLegal(intVT) && isTypeLegal(LoadedVT)) {
-      if (!isOperationLegalOrCustom(ISD::LOAD, intVT)) {
+      if (!isOperationLegalOrCustom(ISD::LOAD, intVT) &&
+          LoadedVT.isVector()) {
         // Scalarize the load and let the individual components be handled.
         SDValue Scalarized = scalarizeVectorLoad(LD, DAG);
         if (Scalarized->getOpcode() == ISD::MERGE_VALUES)
@@ -4303,13 +4372,14 @@ SDValue TargetLowering::expandUnalignedStore(StoreSDNode *ST,
   EVT VT = Val.getValueType();
   int Alignment = ST->getAlignment();
   auto &MF = DAG.getMachineFunction();
+  EVT MemVT = ST->getMemoryVT();
 
   SDLoc dl(ST);
-  if (ST->getMemoryVT().isFloatingPoint() ||
-      ST->getMemoryVT().isVector()) {
+  if (MemVT.isFloatingPoint() || MemVT.isVector()) {
     EVT intVT = EVT::getIntegerVT(*DAG.getContext(), VT.getSizeInBits());
     if (isTypeLegal(intVT)) {
-      if (!isOperationLegalOrCustom(ISD::STORE, intVT)) {
+      if (!isOperationLegalOrCustom(ISD::STORE, intVT) &&
+          MemVT.isVector()) {
         // Scalarize the store and let the individual components be handled.
         SDValue Result = scalarizeVectorStore(ST, DAG);
 
