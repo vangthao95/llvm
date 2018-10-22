@@ -747,8 +747,9 @@ Value *InstCombiner::SimplifySelectsFeedingBinaryOp(BinaryOperator &I,
 /// Given a 'sub' instruction, return the RHS of the instruction if the LHS is a
 /// constant zero (which is the 'negate' form).
 Value *InstCombiner::dyn_castNegVal(Value *V) const {
-  if (BinaryOperator::isNeg(V))
-    return BinaryOperator::getNegArgument(V);
+  Value *NegV;
+  if (match(V, m_Neg(m_Value(NegV))))
+    return NegV;
 
   // Constants can be considered to be negated values if they can be folded.
   if (ConstantInt *C = dyn_cast<ConstantInt>(V))
@@ -2347,7 +2348,7 @@ tryToMoveFreeBeforeNullTest(CallInst &FI) {
     return nullptr;
 
   // Validate the rest of constraint #1 by matching on the pred branch.
-  TerminatorInst *TI = PredBB->getTerminator();
+  Instruction *TI = PredBB->getTerminator();
   BasicBlock *TrueBB, *FalseBB;
   ICmpInst::Predicate Pred;
   if (!match(TI, m_Br(m_ICmp(Pred, m_Specific(Op), m_Zero()), TrueBB, FalseBB)))
@@ -3285,7 +3286,7 @@ static bool AddReachableCodeToWorklist(BasicBlock *BB, const DataLayout &DL,
 
     // Recursively visit successors.  If this is a branch or switch on a
     // constant, only visit the reachable successor.
-    TerminatorInst *TI = BB->getTerminator();
+    Instruction *TI = BB->getTerminator();
     if (BranchInst *BI = dyn_cast<BranchInst>(TI)) {
       if (BI->isConditional() && isa<ConstantInt>(BI->getCondition())) {
         bool CondVal = cast<ConstantInt>(BI->getCondition())->getZExtValue();
