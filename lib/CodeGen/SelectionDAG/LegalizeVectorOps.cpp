@@ -390,6 +390,7 @@ SDValue VectorLegalizer::LegalizeOp(SDValue Op) {
   case ISD::UMUL_LOHI:
   case ISD::FCANONICALIZE:
   case ISD::SADDSAT:
+  case ISD::UADDSAT:
     Action = TLI.getOperationAction(Node->getOpcode(), Node->getValueType(0));
     break;
   case ISD::FP_ROUND_INREG:
@@ -1103,24 +1104,10 @@ SDValue VectorLegalizer::ExpandCTLZ(SDValue Op) {
 }
 
 SDValue VectorLegalizer::ExpandCTTZ(SDValue Op) {
-  EVT VT = Op.getValueType();
-  unsigned NumBitsPerElt = VT.getScalarSizeInBits();
-
-  // If the non-ZERO_UNDEF version is supported we can use that instead.
-  if (TLI.isOperationLegalOrCustom(ISD::CTTZ, VT)) {
-    SDLoc DL(Op);
-    return DAG.getNode(ISD::CTTZ, DL, VT, Op.getOperand(0));
-  }
-
-  // If we have the appropriate vector bit operations, it is better to use them
-  // than unrolling and expanding each component.
-  if (isPowerOf2_32(NumBitsPerElt) &&
-      (TLI.isOperationLegalOrCustom(ISD::CTPOP, VT) ||
-       TLI.isOperationLegalOrCustom(ISD::CTLZ, VT)) &&
-      TLI.isOperationLegalOrCustom(ISD::SUB, VT) &&
-      TLI.isOperationLegalOrCustomOrPromote(ISD::AND, VT) &&
-      TLI.isOperationLegalOrCustomOrPromote(ISD::XOR, VT))
-    return Op;
+  // Attempt to expand using TargetLowering.
+  SDValue Result;
+  if (TLI.expandCTTZ(Op.getNode(), Result, DAG))
+    return Result;
 
   // Otherwise go ahead and unroll.
   return DAG.UnrollVectorOp(Op.getNode());

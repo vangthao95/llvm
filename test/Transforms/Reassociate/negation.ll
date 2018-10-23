@@ -33,43 +33,14 @@ define i32 @test2(i32 %a, i32 %b, i32 %z) {
 
 define <2 x i32> @negate_vec_undefs(<2 x i32> %a, <2 x i32> %b, <2 x i32> %z) {
 ; CHECK-LABEL: @negate_vec_undefs(
-; CHECK-NEXT:    [[TMP1:%.*]] = mul <2 x i32> [[Z:%.*]], <i32 -40, i32 -40>
-; CHECK-NEXT:    [[E:%.*]] = mul <2 x i32> [[TMP1]], [[A:%.*]]
-; CHECK-NEXT:    [[F:%.*]] = sub <2 x i32> <i32 0, i32 undef>, [[E]]
+; CHECK-NEXT:    [[E:%.*]] = mul <2 x i32> [[A:%.*]], <i32 40, i32 40>
+; CHECK-NEXT:    [[F:%.*]] = mul <2 x i32> [[E]], [[Z:%.*]]
 ; CHECK-NEXT:    ret <2 x i32> [[F]]
 ;
   %d = mul <2 x i32> %z, <i32 40, i32 40>
   %c = sub <2 x i32> <i32 0, i32 undef>, %d
   %e = mul <2 x i32> %a, %c
   %f = sub <2 x i32> <i32 0, i32 undef>, %e
-  ret <2 x i32> %f
-}
-
-define i32 @not_not(i32 %a, i32 %b, i32 %z) {
-; CHECK-LABEL: @not_not(
-; CHECK-NEXT:    [[D:%.*]] = and i32 [[Z:%.*]], 40
-; CHECK-NEXT:    [[A_NOT:%.*]] = xor i32 [[A:%.*]], -1
-; CHECK-NEXT:    [[F:%.*]] = and i32 [[D]], [[A_NOT]]
-; CHECK-NEXT:    ret i32 [[F]]
-;
-  %d = and i32 %z, 40
-  %c = xor i32 -1, %d
-  %e = or i32 %a, %c
-  %f = xor i32 -1, %e
-  ret i32 %f
-}
-
-define <2 x i32> @not_vec_undefs(<2 x i32> %a, <2 x i32> %b, <2 x i32> %z) {
-; CHECK-LABEL: @not_vec_undefs(
-; CHECK-NEXT:    [[D:%.*]] = or <2 x i32> [[Z:%.*]], <i32 40, i32 40>
-; CHECK-NEXT:    [[A_NOT:%.*]] = xor <2 x i32> [[A:%.*]], <i32 -1, i32 -1>
-; CHECK-NEXT:    [[F:%.*]] = or <2 x i32> [[D]], [[A_NOT]]
-; CHECK-NEXT:    ret <2 x i32> [[F]]
-;
-  %d = or <2 x i32> %z, <i32 40, i32 40>
-  %c = xor <2 x i32> <i32 undef, i32 -1>, %d
-  %e = and <2 x i32> %a, %c
-  %f = xor <2 x i32> <i32 undef, i32 -1>, %e
   ret <2 x i32> %f
 }
 

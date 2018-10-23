@@ -4142,6 +4142,61 @@ SDValue TargetLowering::expandFMINNUM_FMAXNUM(SDNode *Node,
   return SDValue();
 }
 
+bool TargetLowering::expandCTTZ(SDNode *Node, SDValue &Result,
+                                SelectionDAG &DAG) const {
+  SDLoc dl(Node);
+  EVT VT = Node->getValueType(0);
+  SDValue Op = Node->getOperand(0);
+  unsigned NumBitsPerElt = VT.getScalarSizeInBits();
+
+  // If the non-ZERO_UNDEF version is supported we can use that instead.
+  if (Node->getOpcode() == ISD::CTTZ_ZERO_UNDEF &&
+      isOperationLegalOrCustom(ISD::CTTZ, VT)) {
+    Result = DAG.getNode(ISD::CTTZ, dl, VT, Op);
+    return true;
+  }
+
+  // If the ZERO_UNDEF version is supported use that and handle the zero case.
+  if (isOperationLegalOrCustom(ISD::CTTZ_ZERO_UNDEF, VT)) {
+    EVT SetCCVT =
+        getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), VT);
+    SDValue CTTZ = DAG.getNode(ISD::CTTZ_ZERO_UNDEF, dl, VT, Op);
+    SDValue Zero = DAG.getConstant(0, dl, VT);
+    SDValue SrcIsZero = DAG.getSetCC(dl, SetCCVT, Op, Zero, ISD::SETEQ);
+    Result = DAG.getNode(ISD::SELECT, dl, VT, SrcIsZero,
+                         DAG.getConstant(NumBitsPerElt, dl, VT), CTTZ);
+    return true;
+  }
+
+  // Only expand vector types if we have the appropriate vector bit operations.
+  if (VT.isVector() && (!isPowerOf2_32(NumBitsPerElt) ||
+                        (!isOperationLegalOrCustom(ISD::CTPOP, VT) &&
+                         !isOperationLegalOrCustom(ISD::CTLZ, VT)) ||
+                        !isOperationLegalOrCustom(ISD::SUB, VT) ||
+                        !isOperationLegalOrCustomOrPromote(ISD::AND, VT) ||
+                        !isOperationLegalOrCustomOrPromote(ISD::XOR, VT)))
+    return false;
+
+  // for now, we use: { return popcount(~x & (x - 1)); }
+  // unless the target has ctlz but not ctpop, in which case we use:
+  // { return 32 - nlz(~x & (x-1)); }
+  // Ref: "Hacker's Delight" by Henry Warren
+  SDValue Tmp = DAG.getNode(
+      ISD::AND, dl, VT, DAG.getNOT(dl, Op, VT),
+      DAG.getNode(ISD::SUB, dl, VT, Op, DAG.getConstant(1, dl, VT)));
+
+  // If ISD::CTLZ is legal and CTPOP isn't, then do that instead.
+  if (isOperationLegal(ISD::CTLZ, VT) && !isOperationLegal(ISD::CTPOP, VT)) {
+    Result =
+        DAG.getNode(ISD::SUB, dl, VT, DAG.getConstant(NumBitsPerElt, dl, VT),
+                    DAG.getNode(ISD::CTLZ, dl, VT, Tmp));
+    return true;
+  }
+
+  Result = DAG.getNode(ISD::CTPOP, dl, VT, Tmp);
+  return true;
+}
+
 SDValue TargetLowering::scalarizeVectorLoad(LoadSDNode *LD,
                                             SelectionDAG &DAG) const {
   SDLoc SL(LD);
@@ -4681,13 +4736,12 @@ SDValue TargetLowering::lowerCmpEqZeroToCtlzSrl(SDValue Op,
   return SDValue();
 }
 
-SDValue
-TargetLowering::getExpandedSignedSaturationAddition(SDNode *Node,
-                                                    SelectionDAG &DAG) const {
-  assert(Node->getOpcode() == ISD::SADDSAT &&
-         "Expected method to receive SADDSAT node.");
-  assert(Node->getNumOperands() == 2 &&
-         "Expected SADDSAT node to have 2 operands.");
+SDValue TargetLowering::getExpandedSaturationAddition(SDNode *Node,
+                                                      SelectionDAG &DAG) const {
+  unsigned Opcode = Node->getOpcode();
+  assert((Opcode == ISD::SADDSAT || Opcode == ISD::UADDSAT) &&
+         "Expected method to receive SADDSAT or UADDSAT node.");
+  assert(Node->getNumOperands() == 2 && "Expected node to have 2 operands.");
 
   SDLoc dl(Node);
   SDValue LHS = Node->getOperand(0);
@@ -4699,27 +4753,33 @@ TargetLowering::getExpandedSignedSaturationAddition(SDNode *Node,
          "Expected operands to be integers. Vector of int arguments should "
          "already be unrolled.");
   assert(LHS.getValueType() == RHS.getValueType() &&
-         "Expected both operands of SADDSAT to be the same type");
+         "Expected both operands to be the same type");
 
+  unsigned OverflowOp = Opcode == ISD::SADDSAT ? ISD::SADDO : ISD::UADDO;
   unsigned BitWidth = LHS.getValueSizeInBits();
   EVT ResultType = LHS.getValueType();
   EVT BoolVT =
       getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), ResultType);
   SDValue Result =
-      DAG.getNode(ISD::SADDO, dl, DAG.getVTList(ResultType, BoolVT), LHS, RHS);
+      DAG.getNode(OverflowOp, dl, DAG.getVTList(ResultType, BoolVT), LHS, RHS);
   SDValue Sum = Result.getValue(0);
   SDValue Overflow = Result.getValue(1);
+  SDValue Zero = DAG.getConstant(0, dl, ResultType);
 
-  // SatMax -> Overflow && Sum < 0
-  // SatMin -> Overflow && Sum > 0
-  SDValue Zero = DAG.getConstant(0, dl, LHS.getValueType());
-
-  SDValue SumNeg = DAG.getSetCC(dl, BoolVT, Sum, Zero, ISD::SETLT);
-  APInt MinVal = APInt::getSignedMinValue(BitWidth);
-  APInt MaxVal = APInt::getSignedMaxValue(BitWidth);
-  SDValue SatMin = DAG.getConstant(MinVal, dl, ResultType);
-  SDValue SatMax = DAG.getConstant(MaxVal, dl, ResultType);
-
-  Result = DAG.getSelect(dl, ResultType, SumNeg, SatMax, SatMin);
-  return DAG.getSelect(dl, ResultType, Overflow, Result, Sum);
+  if (Opcode == ISD::SADDSAT) {
+    // SatMax -> Overflow && Sum < 0
+    // SatMin -> Overflow && Sum > 0
+    APInt MinVal = APInt::getSignedMinValue(BitWidth);
+    APInt MaxVal = APInt::getSignedMaxValue(BitWidth);
+    SDValue SatMin = DAG.getConstant(MinVal, dl, ResultType);
+    SDValue SatMax = DAG.getConstant(MaxVal, dl, ResultType);
+    SDValue SumNeg = DAG.getSetCC(dl, BoolVT, Sum, Zero, ISD::SETLT);
+    Result = DAG.getSelect(dl, ResultType, SumNeg, SatMax, SatMin);
+    return DAG.getSelect(dl, ResultType, Overflow, Result, Sum);
+  } else {
+    // Just need to check overflow for SatMax.
+    APInt MaxVal = APInt::getMaxValue(BitWidth);
+    SDValue SatMax = DAG.getConstant(MaxVal, dl, ResultType);
+    return DAG.getSelect(dl, ResultType, Overflow, SatMax, Sum);
+  }
 }
