@@ -500,9 +500,7 @@ class DwarfDebug : public DebugHandlerBase {
 
   /// Emit address ranges into a debug ranges section.
   void emitDebugRanges();
-
-  /// Emit range lists into a DWARF v5 debug rnglists section.
-  void emitDebugRnglists();
+  void emitDebugRangesDWO();
 
   /// Emit macros into a debug macinfo section.
   void emitDebugMacinfo();
@@ -755,9 +753,6 @@ public:
   bool tuneForLLDB() const { return DebuggerTuning == DebuggerKind::LLDB; }
   bool tuneForSCE() const { return DebuggerTuning == DebuggerKind::SCE; }
   /// @}
-
-private:
-  void emitDebugLoc(const DebugLoc &DL);
 };
 
 } // end namespace llvm

@@ -101,14 +101,19 @@ static bool isSingleEntrySingleExit(BasicBlock *Entry, const BasicBlock *Exit,
   return true;
 }
 
+// Same as blockEndsInUnreachable in CodeGen/BranchFolding.cpp. Do not modify
+// this function unless you modify the MBB version as well.
+//
+/// A no successor, non-return block probably ends in unreachable and is cold.
+/// Also consider a block that ends in an indirect branch to be a return block,
+/// since many targets use plain indirect branches to return.
 bool blockEndsInUnreachable(const BasicBlock &BB) {
+  if (!succ_empty(&BB))
+    return false;
   if (BB.empty())
     return true;
-  const TerminatorInst *I = BB.getTerminator();
-  if (isa<ReturnInst>(I) || isa<IndirectBrInst>(I))
-    return true;
-  // Unreachable blocks do not have any successor.
-  return succ_empty(&BB);
+  const Instruction *I = BB.getTerminator();
+  return !(isa<ReturnInst>(I) || isa<IndirectBrInst>(I));
 }
 
 static bool exceptionHandlingFunctions(const CallInst *CI) {
@@ -123,8 +128,7 @@ static bool exceptionHandlingFunctions(const CallInst *CI) {
          FName == "__cxa_end_catch";
 }
 
-static
-bool unlikelyExecuted(const BasicBlock &BB) {
+static bool unlikelyExecuted(const BasicBlock &BB) {
   if (blockEndsInUnreachable(BB))
     return true;
   // Exception handling blocks are unlikely executed.
@@ -145,13 +149,32 @@ bool unlikelyExecuted(const BasicBlock &BB) {
   return false;
 }
 
+static bool returnsOrHasSideEffects(const BasicBlock &BB) {
+  const Instruction *I = BB.getTerminator();
+  if (isa<ReturnInst>(I) || isa<IndirectBrInst>(I) || isa<InvokeInst>(I))
+    return true;
+
+  for (const Instruction &I : BB)
+    if (const CallInst *CI = dyn_cast<CallInst>(&I)) {
+      if (CI->hasFnAttr(Attribute::NoReturn))
+        return true;
+
+      if (isa<InlineAsm>(CI->getCalledValue()))
+        return true;
+    }
+
+  return false;
+}
+
 static DenseSetBB getHotBlocks(Function &F) {
 
   // Mark all cold basic blocks.
   DenseSetBB ColdBlocks;
   for (BasicBlock &BB : F)
-    if (unlikelyExecuted(BB))
+    if (unlikelyExecuted(BB)) {
+      LLVM_DEBUG(llvm::dbgs() << "\nForward propagation marks cold: " << BB);
       ColdBlocks.insert((const BasicBlock *)&BB);
+    }
 
   // Forward propagation: basic blocks are hot when they are reachable from the
   // beginning of the function through a path that does not contain cold blocks.
@@ -203,7 +226,12 @@ static DenseSetBB getHotBlocks(Function &F) {
     if (ColdBlocks.count(It))
       continue;
 
+    // Do not back-propagate to blocks that return or have side effects.
+    if (returnsOrHasSideEffects(*It))
+      continue;
+
     // Move the block from HotBlocks to ColdBlocks.
+    LLVM_DEBUG(llvm::dbgs() << "\nBack propagation marks cold: " << *It);
     HotBlocks.erase(It);
     ColdBlocks.insert(It);
 
@@ -307,6 +335,7 @@ Function *
 HotColdSplitting::extractColdRegion(const SmallVectorImpl<BasicBlock *> &Region,
                                     DominatorTree *DT, BlockFrequencyInfo *BFI,
                                     OptimizationRemarkEmitter &ORE) {
+  assert(!Region.empty());
   LLVM_DEBUG(for (auto *BB : Region)
           llvm::dbgs() << "\nExtracting: " << *BB;);
 
@@ -320,6 +349,7 @@ HotColdSplitting::extractColdRegion(const SmallVectorImpl<BasicBlock *> &Region,
   if (Outputs.size() > 0)
     return nullptr;
 
+  Function *OrigF = Region[0]->getParent();
   if (Function *OutF = CE.extractCodeRegion()) {
     User *U = *OutF->user_begin();
     CallInst *CI = cast<CallInst>(U);
@@ -331,6 +361,12 @@ HotColdSplitting::extractColdRegion(const SmallVectorImpl<BasicBlock *> &Region,
     }
     CI->setIsNoInline();
     LLVM_DEBUG(llvm::dbgs() << "Outlined Region: " << *OutF);
+    ORE.emit([&]() {
+      return OptimizationRemark(DEBUG_TYPE, "HotColdSplit",
+                                &*Region[0]->begin())
+             << ore::NV("Original", OrigF) << " split cold code into "
+             << ore::NV("Split", OutF);
+    });
     return OutF;
   }
 
@@ -353,6 +389,12 @@ const Function *HotColdSplitting::outlineColdBlocks(Function &F,
   // Walking the dominator tree allows us to find the largest
   // cold region.
   BasicBlock *Begin = DT->getRootNode()->getBlock();
+
+  // Early return if the beginning of the function has been marked cold,
+  // otherwise all the function gets outlined.
+  if (PSI->isColdBB(Begin, BFI) || !HotBlocks.count(Begin))
+    return nullptr;
+
   for (auto I = df_begin(Begin), E = df_end(Begin); I != E; ++I) {
     BasicBlock *BB = *I;
     if (PSI->isColdBB(BB, BFI) || !HotBlocks.count(BB)) {

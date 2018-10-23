@@ -876,43 +876,62 @@ Instruction *InstCombiner::visitInsertElementInst(InsertElementInst &IE) {
   if (isa<UndefValue>(ScalarOp) || isa<UndefValue>(IdxOp))
     replaceInstUsesWith(IE, VecOp);
 
-  // If the inserted element was extracted from some other vector, and if the
-  // indexes are constant, try to turn this into a shufflevector operation.
-  if (ExtractElementInst *EI = dyn_cast<ExtractElementInst>(ScalarOp)) {
-    if (isa<ConstantInt>(EI->getOperand(1)) && isa<ConstantInt>(IdxOp)) {
-      unsigned NumInsertVectorElts = IE.getType()->getNumElements();
-      unsigned NumExtractVectorElts =
-          EI->getOperand(0)->getType()->getVectorNumElements();
-      unsigned ExtractedIdx =
-        cast<ConstantInt>(EI->getOperand(1))->getZExtValue();
-      unsigned InsertedIdx = cast<ConstantInt>(IdxOp)->getZExtValue();
+  // If the inserted element was extracted from some other vector and both
+  // indexes are constant, try to turn this into a shuffle.
+  uint64_t InsertedIdx, ExtractedIdx;
+  Value *ExtVecOp;
+  if (match(IdxOp, m_ConstantInt(InsertedIdx)) &&
+      match(ScalarOp, m_ExtractElement(m_Value(ExtVecOp),
+                                       m_ConstantInt(ExtractedIdx)))) {
+    unsigned NumInsertVectorElts = IE.getType()->getNumElements();
+    unsigned NumExtractVectorElts = ExtVecOp->getType()->getVectorNumElements();
+    if (ExtractedIdx >= NumExtractVectorElts) // Out of range extract.
+      return replaceInstUsesWith(IE, VecOp);
 
-      if (ExtractedIdx >= NumExtractVectorElts) // Out of range extract.
-        return replaceInstUsesWith(IE, VecOp);
+    if (InsertedIdx >= NumInsertVectorElts)  // Out of range insert.
+      return replaceInstUsesWith(IE, UndefValue::get(IE.getType()));
 
-      if (InsertedIdx >= NumInsertVectorElts)  // Out of range insert.
-        return replaceInstUsesWith(IE, UndefValue::get(IE.getType()));
+    // If we are extracting a value from a vector, then inserting it right
+    // back into the same place, just use the input vector.
+    if (ExtVecOp == VecOp && ExtractedIdx == InsertedIdx)
+      return replaceInstUsesWith(IE, VecOp);
 
-      // If we are extracting a value from a vector, then inserting it right
-      // back into the same place, just use the input vector.
-      if (EI->getOperand(0) == VecOp && ExtractedIdx == InsertedIdx)
-        return replaceInstUsesWith(IE, VecOp);
+    // TODO: Looking at the user(s) to determine if this insert is a
+    // fold-to-shuffle opportunity does not match the usual instcombine
+    // constraints. We should decide if the transform is worthy based only
+    // on this instruction and its operands, but that may not work currently.
+    //
+    // Here, we are trying to avoid creating shuffles before reaching
+    // the end of a chain of extract-insert pairs. This is complicated because
+    // we do not generally form arbitrary shuffle masks in instcombine
+    // (because those may codegen poorly), but collectShuffleElements() does
+    // exactly that.
+    //
+    // The rules for determining what is an acceptable target-independent
+    // shuffle mask are fuzzy because they evolve based on the backend's
+    // capabilities and real-world impact.
+    auto isShuffleRootCandidate = [](InsertElementInst &Insert) {
+      if (!Insert.hasOneUse())
+        return true;
+      auto *InsertUser = dyn_cast<InsertElementInst>(Insert.user_back());
+      if (!InsertUser)
+        return true;
+      return false;
+    };
 
-      // If this insertelement isn't used by some other insertelement, turn it
-      // (and any insertelements it points to), into one big shuffle.
-      if (!IE.hasOneUse() || !isa<InsertElementInst>(IE.user_back())) {
-        SmallVector<Constant*, 16> Mask;
-        ShuffleOps LR = collectShuffleElements(&IE, Mask, nullptr, *this);
+    // Try to form a shuffle from a chain of extract-insert ops.
+    if (isShuffleRootCandidate(IE)) {
+      SmallVector<Constant*, 16> Mask;
+      ShuffleOps LR = collectShuffleElements(&IE, Mask, nullptr, *this);
 
-        // The proposed shuffle may be trivial, in which case we shouldn't
-        // perform the combine.
-        if (LR.first != &IE && LR.second != &IE) {
-          // We now have a shuffle of LHS, RHS, Mask.
-          if (LR.second == nullptr)
-            LR.second = UndefValue::get(LR.first->getType());
-          return new ShuffleVectorInst(LR.first, LR.second,
-                                       ConstantVector::get(Mask));
-        }
+      // The proposed shuffle may be trivial, in which case we shouldn't
+      // perform the combine.
+      if (LR.first != &IE && LR.second != &IE) {
+        // We now have a shuffle of LHS, RHS, Mask.
+        if (LR.second == nullptr)
+          LR.second = UndefValue::get(LR.first->getType());
+        return new ShuffleVectorInst(LR.first, LR.second,
+                                     ConstantVector::get(Mask));
       }
     }
   }
@@ -1477,6 +1496,41 @@ static Instruction *narrowVectorSelect(ShuffleVectorInst &Shuf,
   return SelectInst::Create(NarrowCond, NarrowX, NarrowY);
 }
 
+/// Try to combine 2 shuffles into 1 shuffle by concatenating a shuffle mask.
+static Instruction *foldIdentityExtractShuffle(ShuffleVectorInst &Shuf) {
+  Value *Op0 = Shuf.getOperand(0), *Op1 = Shuf.getOperand(1);
+  if (!Shuf.isIdentityWithExtract() || !isa<UndefValue>(Op1))
+    return nullptr;
+
+  Value *X, *Y;
+  Constant *Mask;
+  if (!match(Op0, m_ShuffleVector(m_Value(X), m_Value(Y), m_Constant(Mask))))
+    return nullptr;
+
+  // We are extracting a subvector from a shuffle. Remove excess elements from
+  // the 1st shuffle mask to eliminate the extract.
+  //
+  // This transform is conservatively limited to identity extracts because we do
+  // not allow arbitrary shuffle mask creation as a target-independent transform
+  // (because we can't guarantee that will lower efficiently).
+  //
+  // If the extracting shuffle has an undef mask element, it transfers to the
+  // new shuffle mask. Otherwise, copy the original mask element. Example:
+  //   shuf (shuf X, Y, <C0, C1, C2, undef, C4>), undef, <0, undef, 2, 3> -->
+  //   shuf X, Y, <C0, undef, C2, undef>
+  unsigned NumElts = Shuf.getType()->getVectorNumElements();
+  SmallVector<Constant *, 16> NewMask(NumElts);
+  assert(NumElts < Mask->getType()->getVectorNumElements() &&
+         "Identity with extract must have less elements than its inputs");
+
+  for (unsigned i = 0; i != NumElts; ++i) {
+    Constant *ExtractMaskElt = Shuf.getMask()->getAggregateElement(i);
+    Constant *MaskElt = Mask->getAggregateElement(i);
+    NewMask[i] = isa<UndefValue>(ExtractMaskElt) ? ExtractMaskElt : MaskElt;
+  }
+  return new ShuffleVectorInst(X, Y, ConstantVector::get(NewMask));
+}
+
 Instruction *InstCombiner::visitShuffleVectorInst(ShuffleVectorInst &SVI) {
   Value *LHS = SVI.getOperand(0);
   Value *RHS = SVI.getOperand(1);
@@ -1498,6 +1552,9 @@ Instruction *InstCombiner::visitShuffleVectorInst(ShuffleVectorInst &SVI) {
       return replaceInstUsesWith(SVI, V);
     return &SVI;
   }
+
+  if (Instruction *I = foldIdentityExtractShuffle(SVI))
+    return I;
 
   SmallVector<int, 16> Mask = SVI.getShuffleMask();
   Type *Int32Ty = Type::getInt32Ty(SVI.getContext());
