@@ -2709,10 +2709,12 @@ bool X86DAGToDAGISel::matchBitExtract(SDNode *Node) {
   // If we have BMI2's BZHI, we are ok with muti-use patterns.
   // Else, if we only have BMI1's BEXTR, we require one-use.
   const bool CanHaveExtraUses = Subtarget->hasBMI2();
-  auto checkOneUse = [CanHaveExtraUses](SDValue Op, unsigned NUses = 1) {
+  auto checkUses = [CanHaveExtraUses](SDValue Op, unsigned NUses) {
     return CanHaveExtraUses ||
            Op.getNode()->hasNUsesOfValue(NUses, Op.getResNo());
   };
+  auto checkOneUse = [checkUses](SDValue Op) { return checkUses(Op, 1); };
+  auto checkTwoUse = [checkUses](SDValue Op) { return checkUses(Op, 2); };
 
   // a) x & ((1 << nbits) + (-1))
   auto matchPatternA = [&checkOneUse, &NBits](SDValue Mask) -> bool {
@@ -2750,7 +2752,8 @@ bool X86DAGToDAGISel::matchBitExtract(SDNode *Node) {
   SDValue X;
 
   // d) x << (32 - y) >> (32 - y)
-  auto matchPatternD = [&checkOneUse, Size, &X, &NBits](SDNode *Node) -> bool {
+  auto matchPatternD = [&checkOneUse, &checkTwoUse, Size, &X,
+                        &NBits](SDNode *Node) -> bool {
     if (Node->getOpcode() != ISD::SRL)
       return false;
     SDValue N0 = Node->getOperand(0);
@@ -2760,7 +2763,7 @@ bool X86DAGToDAGISel::matchBitExtract(SDNode *Node) {
     SDValue N01 = N0->getOperand(1);
     // Both of the shifts must be by the exact same value.
     // There should not be any uses of the shift amount outside of the pattern.
-    if (N1 != N01 || !checkOneUse(N1, 2))
+    if (N1 != N01 || !checkTwoUse(N1))
       return false;
     // Skip over a truncate of the shift amount.
     if (N1->getOpcode() == ISD::TRUNCATE) {
@@ -3566,7 +3569,10 @@ void X86DAGToDAGISel::Select(SDNode *Node) {
           SDValue(CurDAG->getMachineNode(SExtOpcode, dl, MVT::Glue, InFlag),0);
       } else {
         // Zero out the high part, effectively zero extending the input.
-        SDValue ClrNode = SDValue(CurDAG->getMachineNode(X86::MOV32r0, dl, NVT), 0);
+        unsigned ClrOpc = NVT.SimpleTy == MVT::i64 ? X86::MOV64r0
+                                                   : X86::MOV32r0;
+        MVT ClrVT = NVT.SimpleTy == MVT::i64 ? MVT::i64 : MVT::i32;
+        SDValue ClrNode = SDValue(CurDAG->getMachineNode(ClrOpc, dl, ClrVT), 0);
         switch (NVT.SimpleTy) {
         case MVT::i16:
           ClrNode =
@@ -3577,15 +3583,7 @@ void X86DAGToDAGISel::Select(SDNode *Node) {
                       0);
           break;
         case MVT::i32:
-          break;
         case MVT::i64:
-          ClrNode =
-              SDValue(CurDAG->getMachineNode(
-                          TargetOpcode::SUBREG_TO_REG, dl, MVT::i64,
-                          CurDAG->getTargetConstant(0, dl, MVT::i64), ClrNode,
-                          CurDAG->getTargetConstant(X86::sub_32bit, dl,
-                                                    MVT::i32)),
-                      0);
           break;
         default:
           llvm_unreachable("Unexpected division source");

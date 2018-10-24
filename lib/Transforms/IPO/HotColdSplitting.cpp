@@ -265,7 +265,7 @@ private:
                                     DominatorTree *DT, PostDomTree *PDT);
   Function *extractColdRegion(const SmallVectorImpl<BasicBlock *> &Region,
                               DominatorTree *DT, BlockFrequencyInfo *BFI,
-                              OptimizationRemarkEmitter &ORE);
+                              OptimizationRemarkEmitter &ORE, unsigned Count);
   bool isOutlineCandidate(const SmallVectorImpl<BasicBlock *> &Region,
                           const BasicBlock *Exit) const {
     if (!Exit)
@@ -331,16 +331,18 @@ bool HotColdSplitting::shouldOutlineFrom(const Function &F) const {
   return true;
 }
 
-Function *
-HotColdSplitting::extractColdRegion(const SmallVectorImpl<BasicBlock *> &Region,
-                                    DominatorTree *DT, BlockFrequencyInfo *BFI,
-                                    OptimizationRemarkEmitter &ORE) {
+Function *HotColdSplitting::extractColdRegion(
+    const SmallVectorImpl<BasicBlock *> &Region, DominatorTree *DT,
+    BlockFrequencyInfo *BFI, OptimizationRemarkEmitter &ORE, unsigned Count) {
   assert(!Region.empty());
   LLVM_DEBUG(for (auto *BB : Region)
           llvm::dbgs() << "\nExtracting: " << *BB;);
 
   // TODO: Pass BFI and BPI to update profile information.
-  CodeExtractor CE(Region, DT);
+  CodeExtractor CE(Region, DT, /* AggregateArgs */ false, /* BFI */ nullptr,
+                   /* BPI */ nullptr, /* AllowVarArgs */ false,
+                   /* AllowAlloca */ false,
+                   /* Suffix */ "cold." + std::to_string(Count));
 
   SetVector<Value *> Inputs, Outputs, Sinks;
   CE.findInputsOutputs(Inputs, Outputs, Sinks);
@@ -360,6 +362,13 @@ HotColdSplitting::extractColdRegion(const SmallVectorImpl<BasicBlock *> &Region,
       CS.setCallingConv(CallingConv::Cold);
     }
     CI->setIsNoInline();
+
+    // Try to make the outlined code as small as possible on the assumption
+    // that it's cold.
+    assert(!OutF->hasFnAttribute(Attribute::OptimizeNone) &&
+           "An outlined function should never be marked optnone");
+    OutF->addFnAttr(Attribute::MinSize);
+
     LLVM_DEBUG(llvm::dbgs() << "Outlined Region: " << *OutF);
     ORE.emit([&]() {
       return OptimizationRemark(DEBUG_TYPE, "HotColdSplit",
@@ -419,7 +428,7 @@ const Function *HotColdSplitting::outlineColdBlocks(Function &F,
         ++NumColdSESEFound;
         ValidColdRegion.push_back(ExitColdRegion);
         // Candidate for outlining. FIXME: Continue outlining.
-        return extractColdRegion(ValidColdRegion, DT, BFI, ORE);
+        return extractColdRegion(ValidColdRegion, DT, BFI, ORE, /* Count */ 1);
       }
     }
   }
