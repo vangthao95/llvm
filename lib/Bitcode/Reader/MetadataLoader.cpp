@@ -1243,7 +1243,7 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
     break;
   }
   case bitc::METADATA_STRING_TYPE: {
-    if (Record.size() != 6)
+    if (Record.size() != 8)
       return error("Invalid record");
 
     IsDistinct = Record[0];
