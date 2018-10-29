@@ -14,49 +14,43 @@
 //===----------------------------------------------------------------------===//
 
 #include "Stages/FetchStage.h"
+#include "Instruction.h"
 
 namespace mca {
 
-bool FetchStage::hasWorkToComplete() const {
-  return CurrentInstruction.isValid();
-}
+bool FetchStage::hasWorkToComplete() const { return CurrentInstruction; }
 
 bool FetchStage::isAvailable(const InstRef & /* unused */) const {
-  if (CurrentInstruction.isValid())
+  if (CurrentInstruction)
     return checkNextStage(CurrentInstruction);
   return false;
 }
 
-llvm::Error FetchStage::getNextInstruction() {
-  assert(!CurrentInstruction.isValid() &&
-         "There is already an instruction to process!");
+void FetchStage::getNextInstruction() {
+  assert(!CurrentInstruction && "There is already an instruction to process!");
   if (!SM.hasNext())
-    return llvm::ErrorSuccess();
-  const SourceRef SR = SM.peekNext();
-  llvm::Expected<std::unique_ptr<Instruction>> InstOrErr =
-      IB.createInstruction(SR.second);
-  if (!InstOrErr)
-    return InstOrErr.takeError();
-  std::unique_ptr<Instruction> Inst = std::move(InstOrErr.get());
+    return;
+  SourceRef SR = SM.peekNext();
+  std::unique_ptr<Instruction> Inst = llvm::make_unique<Instruction>(SR.second);
   CurrentInstruction = InstRef(SR.first, Inst.get());
   Instructions[SR.first] = std::move(Inst);
   SM.updateNext();
-  return llvm::ErrorSuccess();
 }
 
 llvm::Error FetchStage::execute(InstRef & /*unused */) {
-  assert(CurrentInstruction.isValid() && "There is no instruction to process!");
+  assert(CurrentInstruction && "There is no instruction to process!");
   if (llvm::Error Val = moveToTheNextStage(CurrentInstruction))
     return Val;
 
   // Move the program counter.
   CurrentInstruction.invalidate();
-  return getNextInstruction();
+  getNextInstruction();
+  return llvm::ErrorSuccess();
 }
 
 llvm::Error FetchStage::cycleStart() {
-  if (!CurrentInstruction.isValid())
-    return getNextInstruction();
+  if (!CurrentInstruction)
+    getNextInstruction();
   return llvm::ErrorSuccess();
 }
 

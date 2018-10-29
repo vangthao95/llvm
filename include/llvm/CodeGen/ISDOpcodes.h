@@ -264,6 +264,14 @@ namespace ISD {
     /// resulting value is this minimum value.
     SADDSAT, UADDSAT,
 
+    /// RESULT = [US]SUBSAT(LHS, RHS) - Perform saturation subtraction on 2
+    /// integers with the same bit width (W). If the true value of LHS - RHS
+    /// exceeds the largest value that can be represented by W bits, the
+    /// resulting value is this maximum value. Otherwise, if this value is less
+    /// than the smallest value that can be represented by W bits, the
+    /// resulting value is this minimum value.
+    SSUBSAT, USUBSAT,
+
     /// Simple binary floating point operators.
     FADD, FSUB, FMUL, FDIV, FREM,
 
@@ -577,10 +585,10 @@ namespace ISD {
     /// signaling NaN, returns a quiet NaN.
     FMINNUM_IEEE, FMAXNUM_IEEE,
 
-    /// FMINNAN/FMAXNAN - NaN-propagating minimum/maximum that also treat -0.0
-    /// as less than 0.0. While FMINNUM/FMAXNUM follow IEEE 754-2008 semantics,
-    /// FMINNAN/FMAXNAN follow IEEE 754-2018 draft semantics.
-    FMINNAN, FMAXNAN,
+    /// FMINIMUM/FMAXIMUM - NaN-propagating minimum/maximum that also treat -0.0
+    /// as less than 0.0. While FMINNUM_IEEE/FMAXNUM_IEEE follow IEEE 754-2008
+    /// semantics, FMINIMUM/FMAXIMUM follow IEEE 754-2018 draft semantics.
+    FMINIMUM, FMAXIMUM,
 
     /// FSINCOS - Compute both fsin and fcos as a single operation.
     FSINCOS,
