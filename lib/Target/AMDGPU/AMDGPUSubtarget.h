@@ -263,6 +263,7 @@ public:
     ISAVersion9_0_2,
     ISAVersion9_0_4,
     ISAVersion9_0_6,
+    ISAVersion9_0_9,
   };
 
   enum TrapHandlerAbi {
@@ -513,6 +514,10 @@ public:
 
   bool hasFMA() const {
     return FMA;
+  }
+
+  bool hasSwap() const {
+    return GFX9Insts;
   }
 
   TrapHandlerAbi getTrapHandlerAbi() const {

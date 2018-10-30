@@ -375,6 +375,8 @@ def umax       : SDNode<"ISD::UMAX"      , SDTIntBinOp,
 
 def saddsat    : SDNode<"ISD::SADDSAT"   , SDTIntBinOp, [SDNPCommutative]>;
 def uaddsat    : SDNode<"ISD::UADDSAT"   , SDTIntBinOp, [SDNPCommutative]>;
+def ssubsat    : SDNode<"ISD::SSUBSAT"   , SDTIntBinOp>;
+def usubsat    : SDNode<"ISD::USUBSAT"   , SDTIntBinOp>;
 
 def sext_inreg : SDNode<"ISD::SIGN_EXTEND_INREG", SDTExtInreg>;
 def sext_invec : SDNode<"ISD::SIGN_EXTEND_VECTOR_INREG", SDTExtInvec>;
@@ -413,9 +415,10 @@ def fminnum_ieee : SDNode<"ISD::FMINNUM_IEEE", SDTFPBinOp,
                           [SDNPCommutative]>;
 def fmaxnum_ieee  : SDNode<"ISD::FMAXNUM_IEEE", SDTFPBinOp,
                            [SDNPCommutative]>;
-
-def fminnan    : SDNode<"ISD::FMINNAN"    , SDTFPBinOp>;
-def fmaxnan    : SDNode<"ISD::FMAXNAN"    , SDTFPBinOp>;
+def fminimum   : SDNode<"ISD::FMINIMUM"   , SDTFPBinOp,
+                        [SDNPCommutative, SDNPAssociative]>;
+def fmaximum   : SDNode<"ISD::FMAXIMUM"   , SDTFPBinOp,
+                        [SDNPCommutative, SDNPAssociative]>;
 def fgetsign   : SDNode<"ISD::FGETSIGN"   , SDTFPToIntOp>;
 def fcanonicalize : SDNode<"ISD::FCANONICALIZE", SDTFPUnaryOp>;
 def fneg       : SDNode<"ISD::FNEG"       , SDTFPUnaryOp>;
