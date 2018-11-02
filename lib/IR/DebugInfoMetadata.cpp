@@ -153,6 +153,15 @@ DINode::DIFlags DINode::splitFlags(DIFlags Flags,
       SplitFlags.push_back(FlagVirtualInheritance);
     Flags &= ~R;
   }
+  if (Flags & FlagFortran) {
+    if ((Flags & FlagPure) == FlagPure)
+      SplitFlags.push_back(FlagPure);
+    if ((Flags & FlagElemental) == FlagElemental)
+      SplitFlags.push_back(FlagElemental);
+    if ((Flags & FlagRecursive) == FlagRecursive)
+      SplitFlags.push_back(FlagRecursive);
+    Flags &= ~(FlagPure|FlagElemental|FlagRecursive);
+  }
   if ((Flags & FlagIndirectVirtualBase) == FlagIndirectVirtualBase) {
     Flags &= ~FlagIndirectVirtualBase;
     SplitFlags.push_back(FlagIndirectVirtualBase);
