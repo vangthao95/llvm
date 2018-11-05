@@ -129,6 +129,7 @@ class VectorLegalizer {
   SDValue ExpandFNEG(SDValue Op);
   SDValue ExpandFSUB(SDValue Op);
   SDValue ExpandBITREVERSE(SDValue Op);
+  SDValue ExpandCTPOP(SDValue Op);
   SDValue ExpandCTLZ(SDValue Op);
   SDValue ExpandCTTZ(SDValue Op);
   SDValue ExpandFMINNUM_FMAXNUM(SDValue Op);
@@ -305,6 +306,12 @@ SDValue VectorLegalizer::LegalizeOp(SDValue Op) {
   case ISD::STRICT_FLOG2:
   case ISD::STRICT_FRINT:
   case ISD::STRICT_FNEARBYINT:
+  case ISD::STRICT_FMAXNUM:
+  case ISD::STRICT_FMINNUM:
+  case ISD::STRICT_FCEIL:
+  case ISD::STRICT_FFLOOR:
+  case ISD::STRICT_FROUND:
+  case ISD::STRICT_FTRUNC:
     // These pseudo-ops get legalized as if they were their non-strict
     // equivalent.  For instance, if ISD::FSQRT is legal then ISD::STRICT_FSQRT
     // is also legal, but if ISD::FSQRT requires expansion then so does
@@ -724,6 +731,8 @@ SDValue VectorLegalizer::Expand(SDValue Op) {
     return UnrollVSETCC(Op);
   case ISD::BITREVERSE:
     return ExpandBITREVERSE(Op);
+  case ISD::CTPOP:
+    return ExpandCTPOP(Op);
   case ISD::CTLZ:
   case ISD::CTLZ_ZERO_UNDEF:
     return ExpandCTLZ(Op);
@@ -751,6 +760,12 @@ SDValue VectorLegalizer::Expand(SDValue Op) {
   case ISD::STRICT_FLOG2:
   case ISD::STRICT_FRINT:
   case ISD::STRICT_FNEARBYINT:
+  case ISD::STRICT_FMAXNUM:
+  case ISD::STRICT_FMINNUM:
+  case ISD::STRICT_FCEIL:
+  case ISD::STRICT_FFLOOR:
+  case ISD::STRICT_FROUND:
+  case ISD::STRICT_FTRUNC:
     return ExpandStrictFPOp(Op);
   default:
     return DAG.UnrollVectorOp(Op.getNode());
@@ -865,7 +880,7 @@ SDValue VectorLegalizer::ExpandSIGN_EXTEND_VECTOR_INREG(SDValue Op) {
 
   // First build an any-extend node which can be legalized above when we
   // recurse through it.
-  Op = DAG.getAnyExtendVectorInReg(Src, DL, VT);
+  Op = DAG.getNode(ISD::ANY_EXTEND_VECTOR_INREG, DL, VT, Src);
 
   // Now we need sign extend. Do this by shifting the elements. Even if these
   // aren't legal operations, they have a better chance of being legalized
@@ -1097,6 +1112,16 @@ SDValue VectorLegalizer::ExpandFSUB(SDValue Op) {
       TLI.isOperationLegalOrCustom(ISD::FADD, VT))
     return Op; // Defer to LegalizeDAG
 
+  return DAG.UnrollVectorOp(Op.getNode());
+}
+
+SDValue VectorLegalizer::ExpandCTPOP(SDValue Op) {
+  // Attempt to expand using TargetLowering.
+  SDValue Result;
+  if (TLI.expandCTPOP(Op.getNode(), Result, DAG))
+    return Result;
+
+  // Otherwise go ahead and unroll.
   return DAG.UnrollVectorOp(Op.getNode());
 }
 

@@ -59,6 +59,10 @@ typedef enum {
   LLVMDIFlagTrivial = 1 << 26,
   LLVMDIFlagBigEndian = 1 << 27,
   LLVMDIFlagLittleEndian = 1 << 28,
+  LLVMDIFlagFortran = 1 << 30,
+  LLVMDIFlagPure = (1 << 30) | (1 << 9),
+  LLVMDIFlagElemental = (1 << 30) | (1 << 15),
+  LLVMDIFlagRecursive = (1 << 30) | (1 << 19),
   LLVMDIFlagIndirectVirtualBase = (1 << 2) | (1 << 5),
   LLVMDIFlagAccessibility = LLVMDIFlagPrivate | LLVMDIFlagProtected |
                             LLVMDIFlagPublic,
