@@ -547,6 +547,15 @@ void FastISel::removeDeadCode(MachineBasicBlock::iterator I,
   assert(I.isValid() && E.isValid() && std::distance(I, E) > 0 &&
          "Invalid iterator!");
   while (I != E) {
+    if (LastFlushPoint == I)
+      LastFlushPoint = E;
+    if (SavedInsertPt == I)
+      SavedInsertPt = E;
+    if (EmitStartPt == I)
+      EmitStartPt = E.isValid() ? &*E : nullptr;
+    if (LastLocalValue == I)
+      LastLocalValue = E.isValid() ? &*E : nullptr;
+
     MachineInstr *Dead = &*I;
     ++I;
     Dead->eraseFromParent();
@@ -1444,6 +1453,14 @@ bool FastISel::selectIntrinsicCall(const IntrinsicInst *II) {
     ConstantInt *CI = cast<ConstantInt>(II->getArgOperand(1));
     unsigned long long Res = CI->isZero() ? -1ULL : 0;
     Constant *ResCI = ConstantInt::get(II->getType(), Res);
+    unsigned ResultReg = getRegForValue(ResCI);
+    if (!ResultReg)
+      return false;
+    updateValueMap(II, ResultReg);
+    return true;
+  }
+  case Intrinsic::is_constant: {
+    Constant *ResCI = ConstantInt::get(II->getType(), 0);
     unsigned ResultReg = getRegForValue(ResCI);
     if (!ResultReg)
       return false;
