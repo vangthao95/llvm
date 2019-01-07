@@ -21,7 +21,7 @@ define i32 @subr() !dbg !9 {
 
 !0 = distinct !DICompileUnit(language: DW_LANG_Fortran90, file: !1, producer: "PGI Fortran", isOptimized: false, runtimeVersion: 2, emissionKind: FullDebug, retainedTypes: !14, globals: !2)
 !1 = !DIFile(filename: "none.f90", directory: "/not/here/")
-!2 = !{}
+!2 = !{!13}
 !3 = !{}
 !4 = !DIGlobalVariable(name: "common /a/", scope: !5, file: !1, line: 4, isLocal: false, isDefinition: true, type: !12)
 !5 = !DICommonBlock(scope: !9, declaration: !4, name: "a", file: !1, line: 4)
