@@ -172,7 +172,7 @@ def X86phminpos: SDNode<"X86ISD::PHMINPOS",
 
 def X86vshiftuniform : SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
                                             SDTCisVec<2>, SDTCisInt<0>,
-                                            SDTCisInt<1>]>;
+                                            SDTCisInt<2>]>;
 
 def X86vshl    : SDNode<"X86ISD::VSHL", X86vshiftuniform>;
 def X86vsrl    : SDNode<"X86ISD::VSRL", X86vshiftuniform>;
@@ -227,8 +227,6 @@ def SDTX86CmpPTest : SDTypeProfile<1, 2, [SDTCisVT<0, i32>,
                                           SDTCisVec<1>,
                                           SDTCisSameAs<2, 1>]>;
 
-def X86adds    : SDNode<"X86ISD::ADDS", SDTIntBinOp, [SDNPCommutative]>;
-def X86subs    : SDNode<"X86ISD::SUBS", SDTIntBinOp>;
 def X86mulhrs  : SDNode<"X86ISD::MULHRS", SDTIntBinOp, [SDNPCommutative]>;
 def X86avg     : SDNode<"X86ISD::AVG" , SDTIntBinOp, [SDNPCommutative]>;
 def X86ptest   : SDNode<"X86ISD::PTEST", SDTX86CmpPTest>;

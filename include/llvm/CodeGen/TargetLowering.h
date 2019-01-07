@@ -2407,6 +2407,12 @@ public:
     return false;
   }
 
+  /// Try to convert an extract element of a vector binary operation into an
+  /// extract element followed by a scalar operation.
+  virtual bool shouldScalarizeBinop(SDValue VecOp) const {
+    return false;
+  }
+
   // Return true if it is profitable to use a scalar input to a BUILD_VECTOR
   // even if the vector itself has multiple uses.
   virtual bool aggressivelyPreferBuildVectorSources(EVT VecVT) const {
@@ -2889,16 +2895,6 @@ public:
   bool ShrinkDemandedOp(SDValue Op, unsigned BitWidth, const APInt &Demanded,
                         TargetLoweringOpt &TLO) const;
 
-  /// Helper for SimplifyDemandedBits that can simplify an operation with
-  /// multiple uses.  This function simplifies operand \p OpIdx of \p User and
-  /// then updates \p User with the simplified version. No other uses of
-  /// \p OpIdx are updated. If \p User is the only user of \p OpIdx, this
-  /// function behaves exactly like function SimplifyDemandedBits declared
-  /// below except that it also updates the DAG by calling
-  /// DCI.CommitTargetLoweringOpt.
-  bool SimplifyDemandedBits(SDNode *User, unsigned OpIdx, const APInt &Demanded,
-                            DAGCombinerInfo &DCI, TargetLoweringOpt &TLO) const;
-
   /// Look at Op.  At this point, we know that only the DemandedBits bits of the
   /// result of Op are ever used downstream.  If we can use this information to
   /// simplify Op, create a new simplified DAG node and return true, returning
@@ -3087,6 +3083,15 @@ public:
   /// @param Level the current DAGCombine legalization level.
   virtual bool isDesirableToCommuteWithShift(const SDNode *N,
                                              CombineLevel Level) const {
+    return true;
+  }
+
+  /// Return true if it is profitable to fold a pair of shifts into a mask.
+  /// This is usually true on most targets. But some targets, like Thumb1,
+  /// have immediate shift instructions, but no immediate "and" instruction;
+  /// this makes the fold unprofitable.
+  virtual bool shouldFoldShiftPairToMask(const SDNode *N,
+                                         CombineLevel Level) const {
     return true;
   }
 
