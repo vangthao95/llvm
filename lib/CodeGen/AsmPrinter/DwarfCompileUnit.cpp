@@ -240,7 +240,7 @@ DIE *DwarfCompileUnit::getOrCreateGlobalVariableDIE(
 
   // Construct the context before querying for the existence of the DIE in
   // case such construction creates the DIE.
-  auto *CB = dyn_cast<DICommonBlock>(GVContext);
+  auto *CB = GVContext ? dyn_cast<DICommonBlock>(GVContext) : nullptr;
   DIE *ContextDIE = CB ? getOrCreateCommonBlock(CB, GlobalExprs)
     : getOrCreateContextDIE(GVContext);
 
