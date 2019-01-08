@@ -350,6 +350,9 @@ bool TargetLowering::ShrinkDemandedConstant(SDValue Op, const APInt &Demanded,
   SDLoc DL(Op);
   unsigned Opcode = Op.getOpcode();
 
+  if (!Op.hasOneUse())
+    return false;
+
   // Do target-specific constant optimization.
   if (targetShrinkDemandedConstant(Op, Demanded, TLO))
     return TLO.New.getNode();
@@ -431,56 +434,6 @@ bool TargetLowering::ShrinkDemandedOp(SDValue Op, unsigned BitWidth,
   return false;
 }
 
-bool
-TargetLowering::SimplifyDemandedBits(SDNode *User, unsigned OpIdx,
-                                     const APInt &DemandedBits,
-                                     DAGCombinerInfo &DCI,
-                                     TargetLoweringOpt &TLO) const {
-  SDValue Op = User->getOperand(OpIdx);
-  KnownBits Known;
-
-  if (!SimplifyDemandedBits(Op, DemandedBits, Known, TLO, 0, true))
-    return false;
-
-
-  // Old will not always be the same as Op.  For example:
-  //
-  // Demanded = 0xffffff
-  // Op = i64 truncate (i32 and x, 0xffffff)
-  // In this case simplify demand bits will want to replace the 'and' node
-  // with the value 'x', which will give us:
-  // Old = i32 and x, 0xffffff
-  // New = x
-  if (TLO.Old.hasOneUse()) {
-    // For the one use case, we just commit the change.
-    DCI.CommitTargetLoweringOpt(TLO);
-    return true;
-  }
-
-  // If Old has more than one use then it must be Op, because the
-  // AssumeSingleUse flag is not propogated to recursive calls of
-  // SimplifyDemanded bits, so the only node with multiple use that
-  // it will attempt to combine will be Op.
-  assert(TLO.Old == Op);
-
-  SmallVector <SDValue, 4> NewOps;
-  for (unsigned i = 0, e = User->getNumOperands(); i != e; ++i) {
-    if (i == OpIdx) {
-      NewOps.push_back(TLO.New);
-      continue;
-    }
-    NewOps.push_back(User->getOperand(i));
-  }
-  User = TLO.DAG.UpdateNodeOperands(User, NewOps);
-  // Op has less users now, so we may be able to perform additional combines
-  // with it.
-  DCI.AddToWorklist(Op.getNode());
-  // User's operands have been updated, so we may be able to do new combines
-  // with it.
-  DCI.AddToWorklist(User);
-  return true;
-}
-
 bool TargetLowering::SimplifyDemandedBits(SDValue Op, const APInt &DemandedBits,
                                           DAGCombinerInfo &DCI) const {
   SelectionDAG &DAG = DCI.DAG;
@@ -550,7 +503,7 @@ bool TargetLowering::SimplifyDemandedBits(
     if (Depth != 0) {
       // If not at the root, Just compute the Known bits to
       // simplify things downstream.
-      TLO.DAG.computeKnownBits(Op, Known, DemandedElts, Depth);
+      Known = TLO.DAG.computeKnownBits(Op, DemandedElts, Depth);
       return false;
     }
     // If this is the root being simplified, allow it to have multiple uses,
@@ -666,9 +619,8 @@ bool TargetLowering::SimplifyDemandedBits(
     // simplify the LHS, here we're using information from the LHS to simplify
     // the RHS.
     if (ConstantSDNode *RHSC = isConstOrConstSplat(Op1)) {
-      KnownBits LHSKnown;
       // Do not increment Depth here; that can cause an infinite loop.
-      TLO.DAG.computeKnownBits(Op0, LHSKnown, DemandedElts, Depth);
+      KnownBits LHSKnown = TLO.DAG.computeKnownBits(Op0, DemandedElts, Depth);
       // If the LHS already has zeros where RHSC does, this 'and' is dead.
       if ((LHSKnown.Zero & DemandedBits) ==
           (~RHSC->getAPIntValue() & DemandedBits))
@@ -1381,7 +1333,7 @@ bool TargetLowering::SimplifyDemandedBits(
     // If this is a bitcast, let computeKnownBits handle it.  Only do this on a
     // recursive call where Known may be useful to the caller.
     if (Depth > 0) {
-      TLO.DAG.computeKnownBits(Op, Known, Depth);
+      Known = TLO.DAG.computeKnownBits(Op, Depth);
       return false;
     }
     break;
@@ -1442,7 +1394,7 @@ bool TargetLowering::SimplifyDemandedBits(
     }
 
     // Just use computeKnownBits to compute output bits.
-    TLO.DAG.computeKnownBits(Op, Known, DemandedElts, Depth);
+    Known = TLO.DAG.computeKnownBits(Op, DemandedElts, Depth);
     break;
   }
 
@@ -1848,6 +1800,13 @@ bool TargetLowering::SimplifyDemandedVectorElts(
       return true;
     KnownZero = SrcZero.zextOrTrunc(NumElts);
     KnownUndef = SrcUndef.zextOrTrunc(NumElts);
+
+    if (Op.getOpcode() == ISD::ZERO_EXTEND_VECTOR_INREG) {
+      // zext(undef) upper bits are guaranteed to be zero.
+      if (DemandedElts.isSubsetOf(KnownUndef))
+        return TLO.CombineTo(Op, TLO.DAG.getConstant(0, SDLoc(Op), VT));
+      KnownUndef.clearAllBits();
+    }
     break;
   }
   case ISD::OR:
@@ -1892,6 +1851,13 @@ bool TargetLowering::SimplifyDemandedVectorElts(
     if (SimplifyDemandedVectorElts(Op.getOperand(0), DemandedElts, KnownUndef,
                                    KnownZero, TLO, Depth + 1))
       return true;
+
+    if (Op.getOpcode() == ISD::ZERO_EXTEND) {
+      // zext(undef) upper bits are guaranteed to be zero.
+      if (DemandedElts.isSubsetOf(KnownUndef))
+        return TLO.CombineTo(Op, TLO.DAG.getConstant(0, SDLoc(Op), VT));
+      KnownUndef.clearAllBits();
+    }
     break;
   default: {
     if (Op.getOpcode() >= ISD::BUILTIN_OP_END) {
