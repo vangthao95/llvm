@@ -1,9 +1,8 @@
 //===- SjLjEHPrepare.cpp - Eliminate Invoke & Unwind instructions ---------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -40,15 +39,15 @@ class SjLjEHPrepare : public FunctionPass {
   Type *doubleUnderDataTy;
   Type *doubleUnderJBufTy;
   Type *FunctionContextTy;
-  Constant *RegisterFn;
-  Constant *UnregisterFn;
-  Constant *BuiltinSetupDispatchFn;
-  Constant *FrameAddrFn;
-  Constant *StackAddrFn;
-  Constant *StackRestoreFn;
-  Constant *LSDAAddrFn;
-  Constant *CallSiteFn;
-  Constant *FuncCtxFn;
+  FunctionCallee RegisterFn;
+  FunctionCallee UnregisterFn;
+  Function *BuiltinSetupDispatchFn;
+  Function *FrameAddrFn;
+  Function *StackAddrFn;
+  Function *StackRestoreFn;
+  Function *LSDAAddrFn;
+  Function *CallSiteFn;
+  Function *FuncCtxFn;
   AllocaInst *FuncCtx;
 
 public:

@@ -1,9 +1,8 @@
 //===- MemorySanitizer.cpp - detector of uninitialized reads --------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -321,6 +320,7 @@ static cl::opt<unsigned long long> ClOriginBase("msan-origin-base",
        cl::desc("Define custom MSan OriginBase"),
        cl::Hidden, cl::init(0));
 
+static const char *const kMsanModuleCtorName = "msan.module_ctor";
 static const char *const kMsanInitName = "__msan_init";
 
 namespace {
@@ -536,41 +536,41 @@ private:
   bool CallbacksInitialized = false;
 
   /// The run-time callback to print a warning.
-  Value *WarningFn;
+  FunctionCallee WarningFn;
 
   // These arrays are indexed by log2(AccessSize).
-  Value *MaybeWarningFn[kNumberOfAccessSizes];
-  Value *MaybeStoreOriginFn[kNumberOfAccessSizes];
+  FunctionCallee MaybeWarningFn[kNumberOfAccessSizes];
+  FunctionCallee MaybeStoreOriginFn[kNumberOfAccessSizes];
 
   /// Run-time helper that generates a new origin value for a stack
   /// allocation.
-  Value *MsanSetAllocaOrigin4Fn;
+  FunctionCallee MsanSetAllocaOrigin4Fn;
 
   /// Run-time helper that poisons stack on function entry.
-  Value *MsanPoisonStackFn;
+  FunctionCallee MsanPoisonStackFn;
 
   /// Run-time helper that records a store (or any event) of an
   /// uninitialized value and returns an updated origin id encoding this info.
-  Value *MsanChainOriginFn;
+  FunctionCallee MsanChainOriginFn;
 
   /// MSan runtime replacements for memmove, memcpy and memset.
-  Value *MemmoveFn, *MemcpyFn, *MemsetFn;
+  FunctionCallee MemmoveFn, MemcpyFn, MemsetFn;
 
   /// KMSAN callback for task-local function argument shadow.
-  Value *MsanGetContextStateFn;
+  FunctionCallee MsanGetContextStateFn;
 
   /// Functions for poisoning/unpoisoning local variables
-  Value *MsanPoisonAllocaFn, *MsanUnpoisonAllocaFn;
+  FunctionCallee MsanPoisonAllocaFn, MsanUnpoisonAllocaFn;
 
   /// Each of the MsanMetadataPtrXxx functions returns a pair of shadow/origin
   /// pointers.
-  Value *MsanMetadataPtrForLoadN, *MsanMetadataPtrForStoreN;
-  Value *MsanMetadataPtrForLoad_1_8[4];
-  Value *MsanMetadataPtrForStore_1_8[4];
-  Value *MsanInstrumentAsmStoreFn;
+  FunctionCallee MsanMetadataPtrForLoadN, MsanMetadataPtrForStoreN;
+  FunctionCallee MsanMetadataPtrForLoad_1_8[4];
+  FunctionCallee MsanMetadataPtrForStore_1_8[4];
+  FunctionCallee MsanInstrumentAsmStoreFn;
 
   /// Helper to choose between different MsanMetadataPtrXxx().
-  Value *getKmsanShadowOriginAccessFn(bool isStore, int size);
+  FunctionCallee getKmsanShadowOriginAccessFn(bool isStore, int size);
 
   /// Memory map parameters used in application-to-shadow calculation.
   const MemoryMapParams *MapParams;
@@ -586,6 +586,8 @@ private:
 
   /// An empty volatile inline asm that prevents callback merge.
   InlineAsm *EmptyAsm;
+
+  Function *MsanCtorFunction;
 };
 
 /// A legacy function pass for msan instrumentation.
@@ -821,8 +823,9 @@ void MemorySanitizer::initializeCallbacks(Module &M) {
   CallbacksInitialized = true;
 }
 
-Value *MemorySanitizer::getKmsanShadowOriginAccessFn(bool isStore, int size) {
-  Value **Fns =
+FunctionCallee MemorySanitizer::getKmsanShadowOriginAccessFn(bool isStore,
+                                                             int size) {
+  FunctionCallee *Fns =
       isStore ? MsanMetadataPtrForStore_1_8 : MsanMetadataPtrForLoad_1_8;
   switch (size) {
   case 1:
@@ -839,6 +842,8 @@ Value *MemorySanitizer::getKmsanShadowOriginAccessFn(bool isStore, int size) {
 }
 
 /// Module-level initialization.
+///
+/// inserts a call to __msan_init to the module's constructor list.
 void MemorySanitizer::initializeModule(Module &M) {
   auto &DL = M.getDataLayout();
 
@@ -913,7 +918,22 @@ void MemorySanitizer::initializeModule(Module &M) {
   OriginStoreWeights = MDBuilder(*C).createBranchWeights(1, 1000);
 
   if (!CompileKernel) {
-    getOrCreateInitFunction(M, kMsanInitName);
+    std::tie(MsanCtorFunction, std::ignore) =
+        getOrCreateSanitizerCtorAndInitFunctions(
+            M, kMsanModuleCtorName, kMsanInitName,
+            /*InitArgTypes=*/{},
+            /*InitArgs=*/{},
+            // This callback is invoked when the functions are created the first
+            // time. Hook them into the global ctors list in that case:
+            [&](Function *Ctor, FunctionCallee) {
+              if (!ClWithComdat) {
+                appendToGlobalCtors(M, Ctor, 0);
+                return;
+              }
+              Comdat *MsanCtorComdat = M.getOrInsertComdat(kMsanModuleCtorName);
+              Ctor->setComdat(MsanCtorComdat);
+              appendToGlobalCtors(M, Ctor, 0, Ctor);
+            });
 
     if (TrackOrigins)
       M.getOrInsertGlobal("__msan_track_origins", IRB.getInt32Ty(), [&] {
@@ -1104,7 +1124,7 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
           DL.getTypeSizeInBits(ConvertedShadow->getType());
       unsigned SizeIndex = TypeSizeToSizeIndex(TypeSizeInBits);
       if (AsCall && SizeIndex < kNumberOfAccessSizes && !MS.CompileKernel) {
-        Value *Fn = MS.MaybeStoreOriginFn[SizeIndex];
+        FunctionCallee Fn = MS.MaybeStoreOriginFn[SizeIndex];
         Value *ConvertedShadow2 = IRB.CreateZExt(
             ConvertedShadow, IRB.getIntNTy(8 * (1 << SizeIndex)));
         IRB.CreateCall(Fn, {ConvertedShadow2,
@@ -1186,7 +1206,7 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     unsigned TypeSizeInBits = DL.getTypeSizeInBits(ConvertedShadow->getType());
     unsigned SizeIndex = TypeSizeToSizeIndex(TypeSizeInBits);
     if (AsCall && SizeIndex < kNumberOfAccessSizes && !MS.CompileKernel) {
-      Value *Fn = MS.MaybeWarningFn[SizeIndex];
+      FunctionCallee Fn = MS.MaybeWarningFn[SizeIndex];
       Value *ConvertedShadow2 =
           IRB.CreateZExt(ConvertedShadow, IRB.getIntNTy(8 * (1 << SizeIndex)));
       IRB.CreateCall(Fn, {ConvertedShadow2, MS.TrackOrigins && Origin
@@ -1393,7 +1413,7 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     const DataLayout &DL = F.getParent()->getDataLayout();
     int Size = DL.getTypeStoreSize(ShadowTy);
 
-    Value *Getter = MS.getKmsanShadowOriginAccessFn(isStore, Size);
+    FunctionCallee Getter = MS.getKmsanShadowOriginAccessFn(isStore, Size);
     Value *AddrCast =
         IRB.CreatePointerCast(Addr, PointerType::get(IRB.getInt8Ty(), 0));
     if (Getter) {
@@ -3230,8 +3250,7 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     }
     LLVM_DEBUG(dbgs() << "  done with call args\n");
 
-    FunctionType *FT =
-      cast<FunctionType>(CS.getCalledValue()->getType()->getContainedType(0));
+    FunctionType *FT = CS.getFunctionType();
     if (FT->isVarArg()) {
       VAHelper->visitCallSite(CS, IRB);
     }
@@ -4459,6 +4478,8 @@ static VarArgHelper *CreateVarArgHelper(Function &Func, MemorySanitizer &Msan,
 }
 
 bool MemorySanitizer::sanitizeFunction(Function &F, TargetLibraryInfo &TLI) {
+  if (!CompileKernel && (&F == MsanCtorFunction))
+    return false;
   MemorySanitizerVisitor Visitor(F, *this, TLI);
 
   // Clear out readonly/readnone attributes.

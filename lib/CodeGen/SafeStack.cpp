@@ -1,9 +1,8 @@
 //===- SafeStack.cpp - Safe Stack Insertion -------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -475,8 +474,8 @@ void SafeStack::checkStackGuard(IRBuilder<> &IRB, Function &F, ReturnInst &RI,
                                 /* Unreachable */ true, Weights);
   IRBuilder<> IRBFail(CheckTerm);
   // FIXME: respect -fsanitize-trap / -ftrap-function here?
-  Constant *StackChkFail = F.getParent()->getOrInsertFunction(
-      "__stack_chk_fail", IRB.getVoidTy());
+  FunctionCallee StackChkFail =
+      F.getParent()->getOrInsertFunction("__stack_chk_fail", IRB.getVoidTy());
   IRBFail.CreateCall(StackChkFail, {});
 }
 
@@ -783,7 +782,7 @@ bool SafeStack::run() {
   if (DISubprogram *SP = F.getSubprogram())
     IRB.SetCurrentDebugLocation(DebugLoc::get(SP->getScopeLine(), 0, SP));
   if (SafeStackUsePointerAddress) {
-    Value *Fn = F.getParent()->getOrInsertFunction(
+    FunctionCallee Fn = F.getParent()->getOrInsertFunction(
         "__safestack_pointer_address", StackPtrTy->getPointerTo(0));
     UnsafeStackPtr = IRB.CreateCall(Fn);
   } else {

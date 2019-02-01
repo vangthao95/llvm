@@ -1,9 +1,8 @@
 //===------ SimplifyLibCalls.cpp - Library calls simplifier ---------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -798,8 +797,11 @@ Value *LibCallSimplifier::optimizeMemChr(CallInst *CI, IRBuilder<> &B) {
       Bitfield.setBit((unsigned char)C);
     Value *BitfieldC = B.getInt(Bitfield);
 
-    // First check that the bit field access is within bounds.
+    // Adjust width of "C" to the bitfield width, then mask off the high bits.
     Value *C = B.CreateZExtOrTrunc(CI->getArgOperand(1), BitfieldC->getType());
+    C = B.CreateAnd(C, B.getIntN(Width, 0xFF));
+
+    // First check that the bit field access is within bounds.
     Value *Bounds = B.CreateICmp(ICmpInst::ICMP_ULT, C, B.getIntN(Width, Width),
                                  "memchr.bounds");
 
@@ -1501,9 +1503,8 @@ Value *LibCallSimplifier::optimizeExp2(CallInst *CI, IRBuilder<> &B) {
         One = ConstantExpr::getFPExtend(One, Op->getType());
 
       Module *M = CI->getModule();
-      Value *NewCallee =
-          M->getOrInsertFunction(TLI->getName(LdExp), Op->getType(),
-                                 Op->getType(), B.getInt32Ty());
+      FunctionCallee NewCallee = M->getOrInsertFunction(
+          TLI->getName(LdExp), Op->getType(), Op->getType(), B.getInt32Ty());
       CallInst *CI = B.CreateCall(NewCallee, {One, LdExpArg});
       if (const Function *F = dyn_cast<Function>(Callee->stripPointerCasts()))
         CI->setCallingConv(F->getCallingConv());
@@ -1725,8 +1726,8 @@ static void insertSinCosCall(IRBuilder<> &B, Function *OrigCallee, Value *Arg,
   }
 
   Module *M = OrigCallee->getParent();
-  Value *Callee = M->getOrInsertFunction(Name, OrigCallee->getAttributes(),
-                                         ResTy, ArgTy);
+  FunctionCallee Callee =
+      M->getOrInsertFunction(Name, OrigCallee->getAttributes(), ResTy, ArgTy);
 
   if (Instruction *ArgInst = dyn_cast<Instruction>(Arg)) {
     // If the argument is an instruction, it must dominate all uses so put our
@@ -2023,7 +2024,7 @@ Value *LibCallSimplifier::optimizePrintF(CallInst *CI, IRBuilder<> &B) {
   // arguments.
   if (TLI->has(LibFunc_iprintf) && !callHasFloatingPointArgument(CI)) {
     Module *M = B.GetInsertBlock()->getParent()->getParent();
-    Constant *IPrintFFn =
+    FunctionCallee IPrintFFn =
         M->getOrInsertFunction("iprintf", FT, Callee->getAttributes());
     CallInst *New = cast<CallInst>(CI->clone());
     New->setCalledFunction(IPrintFFn);
@@ -2102,7 +2103,7 @@ Value *LibCallSimplifier::optimizeSPrintF(CallInst *CI, IRBuilder<> &B) {
   // point arguments.
   if (TLI->has(LibFunc_siprintf) && !callHasFloatingPointArgument(CI)) {
     Module *M = B.GetInsertBlock()->getParent()->getParent();
-    Constant *SIPrintFFn =
+    FunctionCallee SIPrintFFn =
         M->getOrInsertFunction("siprintf", FT, Callee->getAttributes());
     CallInst *New = cast<CallInst>(CI->clone());
     New->setCalledFunction(SIPrintFFn);
@@ -2259,7 +2260,7 @@ Value *LibCallSimplifier::optimizeFPrintF(CallInst *CI, IRBuilder<> &B) {
   // floating point arguments.
   if (TLI->has(LibFunc_fiprintf) && !callHasFloatingPointArgument(CI)) {
     Module *M = B.GetInsertBlock()->getParent()->getParent();
-    Constant *FIPrintFFn =
+    FunctionCallee FIPrintFFn =
         M->getOrInsertFunction("fiprintf", FT, Callee->getAttributes());
     CallInst *New = cast<CallInst>(CI->clone());
     New->setCalledFunction(FIPrintFFn);
