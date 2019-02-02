@@ -1,9 +1,8 @@
 //===- LoopIdiomRecognize.cpp - Loop idiom recognition --------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -931,9 +930,8 @@ bool LoopIdiomRecognize::processLoopStridedStore(
 
     Module *M = TheStore->getModule();
     StringRef FuncName = "memset_pattern16";
-    Value *MSP =
-        M->getOrInsertFunction(FuncName, Builder.getVoidTy(),
-                               Int8PtrTy, Int8PtrTy, IntPtr);
+    FunctionCallee MSP = M->getOrInsertFunction(FuncName, Builder.getVoidTy(),
+                                                Int8PtrTy, Int8PtrTy, IntPtr);
     inferLibFuncAttributes(M, FuncName, *TLI);
 
     // Otherwise we should form a memset_pattern16.  PatternValue is known to be

@@ -1,9 +1,8 @@
 //===- WholeProgramDevirt.cpp - Whole program virtual call optimization ---===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1495,8 +1494,10 @@ void DevirtModule::importResolution(VTableSlot Slot, VTableSlotInfo &SlotInfo) {
   if (Res.TheKind == WholeProgramDevirtResolution::SingleImpl) {
     // The type of the function in the declaration is irrelevant because every
     // call site will cast it to the correct type.
-    auto *SingleImpl = M.getOrInsertFunction(
-        Res.SingleImplName, Type::getVoidTy(M.getContext()));
+    Constant *SingleImpl =
+        cast<Constant>(M.getOrInsertFunction(Res.SingleImplName,
+                                             Type::getVoidTy(M.getContext()))
+                           .getCallee());
 
     // This is the import phase so we should not be exporting anything.
     bool IsExported = false;
@@ -1538,8 +1539,12 @@ void DevirtModule::importResolution(VTableSlot Slot, VTableSlotInfo &SlotInfo) {
   }
 
   if (Res.TheKind == WholeProgramDevirtResolution::BranchFunnel) {
-    auto *JT = M.getOrInsertFunction(getGlobalName(Slot, {}, "branch_funnel"),
-                                     Type::getVoidTy(M.getContext()));
+    // The type of the function is irrelevant, because it's bitcast at calls
+    // anyhow.
+    Constant *JT = cast<Constant>(
+        M.getOrInsertFunction(getGlobalName(Slot, {}, "branch_funnel"),
+                              Type::getVoidTy(M.getContext()))
+            .getCallee());
     bool IsExported = false;
     applyICallBranchFunnel(SlotInfo, JT, IsExported);
     assert(!IsExported);
@@ -1562,6 +1567,17 @@ bool DevirtModule::run() {
   Function *TypeCheckedLoadFunc =
       M.getFunction(Intrinsic::getName(Intrinsic::type_checked_load));
   Function *AssumeFunc = M.getFunction(Intrinsic::getName(Intrinsic::assume));
+
+  // If only some of the modules were split, we cannot correctly handle
+  // code that contains type tests or type checked loads.
+  if ((ExportSummary && ExportSummary->partiallySplitLTOUnits()) ||
+      (ImportSummary && ImportSummary->partiallySplitLTOUnits())) {
+    if ((TypeTestFunc && !TypeTestFunc->use_empty()) ||
+        (TypeCheckedLoadFunc && !TypeCheckedLoadFunc->use_empty()))
+      report_fatal_error("inconsistent LTO Unit splitting with llvm.type.test "
+                         "or llvm.type.checked.load");
+    return false;
+  }
 
   // Normally if there are no users of the devirtualization intrinsics in the
   // module, this pass has nothing to do. But if we are exporting, we also need

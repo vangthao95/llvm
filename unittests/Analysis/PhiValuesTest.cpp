@@ -1,9 +1,8 @@
 //===- PhiValuesTest.cpp - PhiValues unit tests ---------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -27,7 +26,8 @@ TEST(PhiValuesTest, SimplePhi) {
   Type *I32PtrTy = Type::getInt32PtrTy(C);
 
   // Create a function with phis that do not have other phis as incoming values
-  Function *F = cast<Function>(M.getOrInsertFunction("f", FunctionType::get(VoidTy, false)));
+  Function *F = Function::Create(FunctionType::get(VoidTy, false),
+                                 Function::ExternalLinkage, "f", M);
 
   BasicBlock *Entry = BasicBlock::Create(C, "entry", F);
   BasicBlock *If = BasicBlock::Create(C, "if", F);
@@ -93,7 +93,8 @@ TEST(PhiValuesTest, DependentPhi) {
   Type *I32PtrTy = Type::getInt32PtrTy(C);
 
   // Create a function with a phi that has another phi as an incoming value
-  Function *F = cast<Function>(M.getOrInsertFunction("f", FunctionType::get(VoidTy, false)));
+  Function *F = Function::Create(FunctionType::get(VoidTy, false),
+                                 Function::ExternalLinkage, "f", M);
 
   BasicBlock *Entry = BasicBlock::Create(C, "entry", F);
   BasicBlock *If1 = BasicBlock::Create(C, "if1", F);

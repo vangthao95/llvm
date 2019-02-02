@@ -1,9 +1,8 @@
 //===- CodeGenPrepare.cpp - Prepare a function for code generation --------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1704,9 +1703,23 @@ bool CodeGenPrepare::optimizeCallInst(CallInst *CI, bool &ModifiedDT) {
   if (II) {
     switch (II->getIntrinsicID()) {
     default: break;
+    case Intrinsic::experimental_widenable_condition: {
+      // Give up on future widening oppurtunties so that we can fold away dead
+      // paths and merge blocks before going into block-local instruction
+      // selection.   
+      if (II->use_empty()) {
+        II->eraseFromParent();
+        return true;
+      }
+      Constant *RetVal = ConstantInt::getTrue(II->getContext());
+      resetIteratorIfInvalidatedWhileCalling(BB, [&]() {
+        replaceAndRecursivelySimplify(CI, RetVal, TLInfo, nullptr);
+      });
+      return true;
+    }
     case Intrinsic::objectsize: {
       // Lower all uses of llvm.objectsize.*
-      ConstantInt *RetVal =
+      Value *RetVal =
           lowerObjectSizeCall(II, *DL, TLInfo, /*MustSucceed=*/true);
 
       resetIteratorIfInvalidatedWhileCalling(BB, [&]() {
@@ -1846,10 +1859,8 @@ bool CodeGenPrepare::dupRetToEnableTailCallOpts(BasicBlock *BB) {
   // return is the first instruction in the block.
   if (PN) {
     BasicBlock::iterator BI = BB->begin();
-    do { ++BI; } while (isa<DbgInfoIntrinsic>(BI));
-    if (&*BI == BCI)
-      // Also skip over the bitcast.
-      ++BI;
+    // Skip over debug and the bitcast.
+    do { ++BI; } while (isa<DbgInfoIntrinsic>(BI) || &*BI == BCI);
     if (&*BI != RetI)
       return false;
   } else {

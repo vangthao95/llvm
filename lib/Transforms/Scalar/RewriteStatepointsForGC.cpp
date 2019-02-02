@@ -1,9 +1,8 @@
 //===- RewriteStatepointsForGC.cpp - Make GC relocations explicit ---------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -347,7 +346,7 @@ static bool containsGCPtrType(Type *Ty) {
   if (ArrayType *AT = dyn_cast<ArrayType>(Ty))
     return containsGCPtrType(AT->getElementType());
   if (StructType *ST = dyn_cast<StructType>(Ty))
-    return llvm::any_of(ST->subtypes(), containsGCPtrType);
+    return llvm::any_of(ST->elements(), containsGCPtrType);
   return false;
 }
 
@@ -1481,8 +1480,9 @@ makeStatepointExplicitImpl(const CallSite CS, /* to replace */
       // calls to @llvm.experimental.deoptimize with different argument types in
       // the same module.  This is fine -- we assume the frontend knew what it
       // was doing when generating this kind of IR.
-      CallTarget =
-          F->getParent()->getOrInsertFunction("__llvm_deoptimize", FTy);
+      CallTarget = F->getParent()
+                       ->getOrInsertFunction("__llvm_deoptimize", FTy)
+                       .getCallee();
 
       IsDeoptimize = true;
     }
@@ -1901,8 +1901,8 @@ static void insertUseHolderAfter(CallSite &CS, const ArrayRef<Value *> Values,
 
   Module *M = CS.getInstruction()->getModule();
   // Use a dummy vararg function to actually hold the values live
-  Function *Func = cast<Function>(M->getOrInsertFunction(
-      "__tmp_use", FunctionType::get(Type::getVoidTy(M->getContext()), true)));
+  FunctionCallee Func = M->getOrInsertFunction(
+      "__tmp_use", FunctionType::get(Type::getVoidTy(M->getContext()), true));
   if (CS.isCall()) {
     // For call safepoints insert dummy calls right after safepoint
     Holders.push_back(CallInst::Create(Func, Values, "",
@@ -2600,6 +2600,33 @@ bool RewriteStatepointsForGC::runOnFunction(Function &F, DominatorTree &DT,
         MadeChange = true;
         Cond->moveBefore(TI);
       }
+  }
+
+  // Nasty workaround - The base computation code in the main algorithm doesn't
+  // consider the fact that a GEP can be used to convert a scalar to a vector.
+  // The right fix for this is to integrate GEPs into the base rewriting
+  // algorithm properly, this is just a short term workaround to prevent
+  // crashes by canonicalizing such GEPs into fully vector GEPs.
+  for (Instruction &I : instructions(F)) {
+    if (!isa<GetElementPtrInst>(I))
+      continue;
+
+    unsigned VF = 0;
+    for (unsigned i = 0; i < I.getNumOperands(); i++)
+      if (I.getOperand(i)->getType()->isVectorTy()) {
+        assert(VF == 0 ||
+               VF == I.getOperand(i)->getType()->getVectorNumElements());
+        VF = I.getOperand(i)->getType()->getVectorNumElements();
+      }
+
+    // It's the vector to scalar traversal through the pointer operand which
+    // confuses base pointer rewriting, so limit ourselves to that case.
+    if (!I.getOperand(0)->getType()->isVectorTy() && VF != 0) {
+      IRBuilder<> B(&I);
+      auto *Splat = B.CreateVectorSplat(VF, I.getOperand(0));
+      I.setOperand(0, Splat);
+      MadeChange = true;
+    }
   }
 
   MadeChange |= insertParsePoints(F, DT, TTI, ParsePointNeeded);
