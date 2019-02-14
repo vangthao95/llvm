@@ -1460,9 +1460,15 @@ bool LoopIdiomRecognize::recognizeAndInsertFFS() {
   const Value *Args[] =
       {InitX, ZeroCheck ? ConstantInt::getTrue(InitX->getContext())
                         : ConstantInt::getFalse(InitX->getContext())};
-  if (CurLoop->getHeader()->size() != IdiomCanonicalSize &&
+
+  // @llvm.dbg doesn't count as they have no semantic effect.
+  auto InstWithoutDebugIt = CurLoop->getHeader()->instructionsWithoutDebug();
+  uint32_t HeaderSize =
+      std::distance(InstWithoutDebugIt.begin(), InstWithoutDebugIt.end());
+
+  if (HeaderSize != IdiomCanonicalSize &&
       TTI->getIntrinsicCost(IntrinID, InitX->getType(), Args) >
-        TargetTransformInfo::TCC_Basic)
+          TargetTransformInfo::TCC_Basic)
     return false;
 
   transformLoopToCountable(IntrinID, PH, CntInst, CntPhi, InitX, DefX,
@@ -1527,7 +1533,7 @@ static CallInst *createPopcntIntrinsic(IRBuilder<> &IRBuilder, Value *Val,
   Type *Tys[] = {Val->getType()};
 
   Module *M = IRBuilder.GetInsertBlock()->getParent()->getParent();
-  Value *Func = Intrinsic::getDeclaration(M, Intrinsic::ctpop, Tys);
+  Function *Func = Intrinsic::getDeclaration(M, Intrinsic::ctpop, Tys);
   CallInst *CI = IRBuilder.CreateCall(Func, Ops);
   CI->setDebugLoc(DL);
 
@@ -1541,7 +1547,7 @@ static CallInst *createFFSIntrinsic(IRBuilder<> &IRBuilder, Value *Val,
   Type *Tys[] = {Val->getType()};
 
   Module *M = IRBuilder.GetInsertBlock()->getParent()->getParent();
-  Value *Func = Intrinsic::getDeclaration(M, IID, Tys);
+  Function *Func = Intrinsic::getDeclaration(M, IID, Tys);
   CallInst *CI = IRBuilder.CreateCall(Func, Ops);
   CI->setDebugLoc(DL);
 

@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements the visitCall and visitInvoke functions.
+// This file implements the visitCall, visitInvoke, and visitCallBr functions.
 //
 //===----------------------------------------------------------------------===//
 
@@ -171,7 +171,7 @@ Instruction *InstCombiner::SimplifyAnyMemTransfer(AnyMemTransferInst *MI) {
 
   Value *Src = Builder.CreateBitCast(MI->getArgOperand(1), NewSrcPtrTy);
   Value *Dest = Builder.CreateBitCast(MI->getArgOperand(0), NewDstPtrTy);
-  LoadInst *L = Builder.CreateLoad(Src);
+  LoadInst *L = Builder.CreateLoad(IntType, Src);
   // Alignment from the mem intrinsic will be better, so use it.
   L->setAlignment(CopySrcAlign);
   if (CopyMD)
@@ -917,7 +917,7 @@ static Value *simplifyX86extrq(IntrinsicInst &II, Value *Op0,
     if (II.getIntrinsicID() == Intrinsic::x86_sse4a_extrq) {
       Value *Args[] = {Op0, CILength, CIIndex};
       Module *M = II.getModule();
-      Value *F = Intrinsic::getDeclaration(M, Intrinsic::x86_sse4a_extrqi);
+      Function *F = Intrinsic::getDeclaration(M, Intrinsic::x86_sse4a_extrqi);
       return Builder.CreateCall(F, Args);
     }
   }
@@ -1018,7 +1018,7 @@ static Value *simplifyX86insertq(IntrinsicInst &II, Value *Op0, Value *Op1,
 
     Value *Args[] = {Op0, Op1, CILength, CIIndex};
     Module *M = II.getModule();
-    Value *F = Intrinsic::getDeclaration(M, Intrinsic::x86_sse4a_insertqi);
+    Function *F = Intrinsic::getDeclaration(M, Intrinsic::x86_sse4a_insertqi);
     return Builder.CreateCall(F, Args);
   }
 
@@ -1182,7 +1182,8 @@ static Value *simplifyMaskedLoad(const IntrinsicInst &II,
   if (maskIsAllOneOrUndef(II.getArgOperand(2))) {
     Value *LoadPtr = II.getArgOperand(0);
     unsigned Alignment = cast<ConstantInt>(II.getArgOperand(1))->getZExtValue();
-    return Builder.CreateAlignedLoad(LoadPtr, Alignment, "unmaskedload");
+    return Builder.CreateAlignedLoad(II.getType(), LoadPtr, Alignment,
+                                     "unmaskedload");
   }
 
   return nullptr;
@@ -1499,7 +1500,7 @@ static Value *simplifyNeonVld1(const IntrinsicInst &II,
 
   auto *BCastInst = Builder.CreateBitCast(II.getArgOperand(0),
                                           PointerType::get(II.getType(), 0));
-  return Builder.CreateAlignedLoad(BCastInst, Alignment);
+  return Builder.CreateAlignedLoad(II.getType(), BCastInst, Alignment);
 }
 
 // Returns true iff the 2 intrinsics have the same operands, limiting the
@@ -1833,8 +1834,8 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
   IntrinsicInst *II = dyn_cast<IntrinsicInst>(&CI);
   if (!II) return visitCallBase(CI);
 
-  // Intrinsics cannot occur in an invoke, so handle them here instead of in
-  // visitCallBase.
+  // Intrinsics cannot occur in an invoke or a callbr, so handle them here
+  // instead of in visitCallBase.
   if (auto *MI = dyn_cast<AnyMemIntrinsic>(II)) {
     bool Changed = false;
 
@@ -2300,7 +2301,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
                                    &DT) >= 16) {
       Value *Ptr = Builder.CreateBitCast(II->getArgOperand(0),
                                          PointerType::getUnqual(II->getType()));
-      return new LoadInst(Ptr);
+      return new LoadInst(II->getType(), Ptr);
     }
     break;
   case Intrinsic::ppc_vsx_lxvw4x:
@@ -2308,7 +2309,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     // Turn PPC VSX loads into normal loads.
     Value *Ptr = Builder.CreateBitCast(II->getArgOperand(0),
                                        PointerType::getUnqual(II->getType()));
-    return new LoadInst(Ptr, Twine(""), false, 1);
+    return new LoadInst(II->getType(), Ptr, Twine(""), false, 1);
   }
   case Intrinsic::ppc_altivec_stvx:
   case Intrinsic::ppc_altivec_stvxl:
@@ -2336,7 +2337,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
                                   II->getType()->getVectorNumElements());
       Value *Ptr = Builder.CreateBitCast(II->getArgOperand(0),
                                          PointerType::getUnqual(VTy));
-      Value *Load = Builder.CreateLoad(Ptr);
+      Value *Load = Builder.CreateLoad(VTy, Ptr);
       return new FPExtInst(Load, II->getType());
     }
     break;
@@ -2346,7 +2347,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
                                    &DT) >= 32) {
       Value *Ptr = Builder.CreateBitCast(II->getArgOperand(0),
                                          PointerType::getUnqual(II->getType()));
-      return new LoadInst(Ptr);
+      return new LoadInst(II->getType(), Ptr);
     }
     break;
   case Intrinsic::ppc_qpx_qvstfs:
@@ -3667,7 +3668,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
         // register (which contains the bitmask of live threads). So a
         // comparison that always returns true is the same as a read of the
         // EXEC register.
-        Value *NewF = Intrinsic::getDeclaration(
+        Function *NewF = Intrinsic::getDeclaration(
             II->getModule(), Intrinsic::read_register, II->getType());
         Metadata *MDArgs[] = {MDString::get(II->getContext(), "exec")};
         MDNode *MD = MDNode::get(II->getContext(), MDArgs);
@@ -3762,8 +3763,8 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
       } else if (!Ty->isFloatTy() && !Ty->isDoubleTy() && !Ty->isHalfTy())
         break;
 
-      Value *NewF = Intrinsic::getDeclaration(II->getModule(), NewIID,
-                                              SrcLHS->getType());
+      Function *NewF =
+          Intrinsic::getDeclaration(II->getModule(), NewIID, SrcLHS->getType());
       Value *Args[] = { SrcLHS, SrcRHS,
                         ConstantInt::get(CC->getType(), SrcPred) };
       CallInst *NewCall = Builder.CreateCall(NewF, Args);
@@ -3878,16 +3879,20 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     // Canonicalize assume(a && b) -> assume(a); assume(b);
     // Note: New assumption intrinsics created here are registered by
     // the InstCombineIRInserter object.
-    Value *AssumeIntrinsic = II->getCalledValue(), *A, *B;
+    FunctionType *AssumeIntrinsicTy = II->getFunctionType();
+    Value *AssumeIntrinsic = II->getCalledValue();
+    Value *A, *B;
     if (match(IIOperand, m_And(m_Value(A), m_Value(B)))) {
-      Builder.CreateCall(AssumeIntrinsic, A, II->getName());
-      Builder.CreateCall(AssumeIntrinsic, B, II->getName());
+      Builder.CreateCall(AssumeIntrinsicTy, AssumeIntrinsic, A, II->getName());
+      Builder.CreateCall(AssumeIntrinsicTy, AssumeIntrinsic, B, II->getName());
       return eraseInstFromFunction(*II);
     }
     // assume(!(a || b)) -> assume(!a); assume(!b);
     if (match(IIOperand, m_Not(m_Or(m_Value(A), m_Value(B))))) {
-      Builder.CreateCall(AssumeIntrinsic, Builder.CreateNot(A), II->getName());
-      Builder.CreateCall(AssumeIntrinsic, Builder.CreateNot(B), II->getName());
+      Builder.CreateCall(AssumeIntrinsicTy, AssumeIntrinsic,
+                         Builder.CreateNot(A), II->getName());
+      Builder.CreateCall(AssumeIntrinsicTy, AssumeIntrinsic,
+                         Builder.CreateNot(B), II->getName());
       return eraseInstFromFunction(*II);
     }
 
@@ -4010,6 +4015,11 @@ Instruction *InstCombiner::visitFenceInst(FenceInst &FI) {
 // InvokeInst simplification
 Instruction *InstCombiner::visitInvokeInst(InvokeInst &II) {
   return visitCallBase(II);
+}
+
+// CallBrInst simplification
+Instruction *InstCombiner::visitCallBrInst(CallBrInst &CBI) {
+  return visitCallBase(CBI);
 }
 
 /// If this cast does not affect the value passed through the varargs area, we
@@ -4140,7 +4150,7 @@ static IntrinsicInst *findInitTrampoline(Value *Callee) {
   return nullptr;
 }
 
-/// Improvements for call and invoke instructions.
+/// Improvements for call, callbr and invoke instructions.
 Instruction *InstCombiner::visitCallBase(CallBase &Call) {
   if (isAllocLikeFn(&Call, &TLI))
     return visitAllocSite(Call);
@@ -4173,7 +4183,7 @@ Instruction *InstCombiner::visitCallBase(CallBase &Call) {
   }
 
   // If the callee is a pointer to a function, attempt to move any casts to the
-  // arguments of the call/invoke.
+  // arguments of the call/callbr/invoke.
   Value *Callee = Call.getCalledValue();
   if (!isa<Function>(Callee) && transformConstExprCastCall(Call))
     return nullptr;
@@ -4206,10 +4216,11 @@ Instruction *InstCombiner::visitCallBase(CallBase &Call) {
       if (isa<CallInst>(OldCall))
         return eraseInstFromFunction(*OldCall);
 
-      // We cannot remove an invoke, because it would change the CFG, just
-      // change the callee to a null pointer.
-      cast<InvokeInst>(OldCall)->setCalledFunction(
-                                    Constant::getNullValue(CalleeF->getType()));
+      // We cannot remove an invoke or a callbr, because it would change thexi
+      // CFG, just change the callee to a null pointer.
+      cast<CallBase>(OldCall)->setCalledFunction(
+          CalleeF->getFunctionType(),
+          Constant::getNullValue(CalleeF->getType()));
       return nullptr;
     }
   }
@@ -4222,8 +4233,8 @@ Instruction *InstCombiner::visitCallBase(CallBase &Call) {
     if (!Call.getType()->isVoidTy())
       replaceInstUsesWith(Call, UndefValue::get(Call.getType()));
 
-    if (isa<InvokeInst>(Call)) {
-      // Can't remove an invoke because we cannot change the CFG.
+    if (Call.isTerminator()) {
+      // Can't remove an invoke or callbr because we cannot change the CFG.
       return nullptr;
     }
 
@@ -4276,7 +4287,7 @@ Instruction *InstCombiner::visitCallBase(CallBase &Call) {
 }
 
 /// If the callee is a constexpr cast of a function, attempt to move the cast to
-/// the arguments of the call/invoke.
+/// the arguments of the call/callbr/invoke.
 bool InstCombiner::transformConstExprCastCall(CallBase &Call) {
   auto *Callee = dyn_cast<Function>(Call.getCalledValue()->stripPointerCasts());
   if (!Callee)
@@ -4327,17 +4338,21 @@ bool InstCombiner::transformConstExprCastCall(CallBase &Call) {
         return false;   // Attribute not compatible with transformed value.
     }
 
-    // If the callbase is an invoke instruction, and the return value is used by
-    // a PHI node in a successor, we cannot change the return type of the call
-    // because there is no place to put the cast instruction (without breaking
-    // the critical edge).  Bail out in this case.
-    if (!Caller->use_empty())
+    // If the callbase is an invoke/callbr instruction, and the return value is
+    // used by a PHI node in a successor, we cannot change the return type of
+    // the call because there is no place to put the cast instruction (without
+    // breaking the critical edge).  Bail out in this case.
+    if (!Caller->use_empty()) {
       if (InvokeInst *II = dyn_cast<InvokeInst>(Caller))
         for (User *U : II->users())
           if (PHINode *PN = dyn_cast<PHINode>(U))
             if (PN->getParent() == II->getNormalDest() ||
                 PN->getParent() == II->getUnwindDest())
               return false;
+      // FIXME: Be conservative for callbr to avoid a quadratic search.
+      if (isa<CallBrInst>(Caller))
+        return false;
+    }
   }
 
   unsigned NumActualArgs = Call.arg_size();
@@ -4491,6 +4506,9 @@ bool InstCombiner::transformConstExprCastCall(CallBase &Call) {
   if (InvokeInst *II = dyn_cast<InvokeInst>(Caller)) {
     NewCall = Builder.CreateInvoke(Callee, II->getNormalDest(),
                                    II->getUnwindDest(), Args, OpBundles);
+  } else if (CallBrInst *CBI = dyn_cast<CallBrInst>(Caller)) {
+    NewCall = Builder.CreateCallBr(Callee, CBI->getDefaultDest(),
+                                   CBI->getIndirectDests(), Args, OpBundles);
   } else {
     NewCall = Builder.CreateCall(Callee, Args, OpBundles);
     cast<CallInst>(NewCall)->setTailCallKind(
@@ -4514,10 +4532,13 @@ bool InstCombiner::transformConstExprCastCall(CallBase &Call) {
       NV = NC = CastInst::CreateBitOrPointerCast(NC, OldRetTy);
       NC->setDebugLoc(Caller->getDebugLoc());
 
-      // If this is an invoke instruction, we should insert it after the first
-      // non-phi, instruction in the normal successor block.
+      // If this is an invoke/callbr instruction, we should insert it after the
+      // first non-phi instruction in the normal successor block.
       if (InvokeInst *II = dyn_cast<InvokeInst>(Caller)) {
         BasicBlock::iterator I = II->getNormalDest()->getFirstInsertionPt();
+        InsertNewInstBefore(NC, *I);
+      } else if (CallBrInst *CBI = dyn_cast<CallBrInst>(Caller)) {
+        BasicBlock::iterator I = CBI->getDefaultDest()->getFirstInsertionPt();
         InsertNewInstBefore(NC, *I);
       } else {
         // Otherwise, it's a call, just insert cast right after the call.
@@ -4550,8 +4571,8 @@ Instruction *
 InstCombiner::transformCallThroughTrampoline(CallBase &Call,
                                              IntrinsicInst &Tramp) {
   Value *Callee = Call.getCalledValue();
-  PointerType *PTy = cast<PointerType>(Callee->getType());
-  FunctionType *FTy = cast<FunctionType>(PTy->getElementType());
+  Type *CalleeTy = Callee->getType();
+  FunctionType *FTy = Call.getFunctionType();
   AttributeList Attrs = Call.getAttributes();
 
   // If the call already has the 'nest' attribute somewhere then give up -
@@ -4560,7 +4581,7 @@ InstCombiner::transformCallThroughTrampoline(CallBase &Call,
     return nullptr;
 
   Function *NestF = cast<Function>(Tramp.getArgOperand(1)->stripPointerCasts());
-  FunctionType *NestFTy = cast<FunctionType>(NestF->getValueType());
+  FunctionType *NestFTy = NestF->getFunctionType();
 
   AttributeList NestAttrs = NestF->getAttributes();
   if (!NestAttrs.isEmpty()) {
@@ -4662,13 +4683,19 @@ InstCombiner::transformCallThroughTrampoline(CallBase &Call,
 
       Instruction *NewCaller;
       if (InvokeInst *II = dyn_cast<InvokeInst>(&Call)) {
-        NewCaller = InvokeInst::Create(NewCallee,
+        NewCaller = InvokeInst::Create(NewFTy, NewCallee,
                                        II->getNormalDest(), II->getUnwindDest(),
                                        NewArgs, OpBundles);
         cast<InvokeInst>(NewCaller)->setCallingConv(II->getCallingConv());
         cast<InvokeInst>(NewCaller)->setAttributes(NewPAL);
+      } else if (CallBrInst *CBI = dyn_cast<CallBrInst>(&Call)) {
+        NewCaller =
+            CallBrInst::Create(NewFTy, NewCallee, CBI->getDefaultDest(),
+                               CBI->getIndirectDests(), NewArgs, OpBundles);
+        cast<CallBrInst>(NewCaller)->setCallingConv(CBI->getCallingConv());
+        cast<CallBrInst>(NewCaller)->setAttributes(NewPAL);
       } else {
-        NewCaller = CallInst::Create(NewCallee, NewArgs, OpBundles);
+        NewCaller = CallInst::Create(NewFTy, NewCallee, NewArgs, OpBundles);
         cast<CallInst>(NewCaller)->setTailCallKind(
             cast<CallInst>(Call).getTailCallKind());
         cast<CallInst>(NewCaller)->setCallingConv(
@@ -4684,9 +4711,7 @@ InstCombiner::transformCallThroughTrampoline(CallBase &Call,
   // Replace the trampoline call with a direct call.  Since there is no 'nest'
   // parameter, there is no need to adjust the argument list.  Let the generic
   // code sort out any function type mismatches.
-  Constant *NewCallee =
-    NestF->getType() == PTy ? NestF :
-                              ConstantExpr::getBitCast(NestF, PTy);
-  Call.setCalledFunction(NewCallee);
+  Constant *NewCallee = ConstantExpr::getBitCast(NestF, CalleeTy);
+  Call.setCalledFunction(FTy, NewCallee);
   return &Call;
 }

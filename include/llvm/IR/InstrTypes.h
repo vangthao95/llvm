@@ -27,6 +27,7 @@
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/OperandTraits.h"
@@ -1032,16 +1033,23 @@ protected:
       return 0;
     case Instruction::Invoke:
       return 2;
+    case Instruction::CallBr:
+      return getNumSubclassExtraOperandsDynamic();
     }
     llvm_unreachable("Invalid opcode!");
   }
+
+  /// Get the number of extra operands for instructions that don't have a fixed
+  /// number of extra operands.
+  unsigned getNumSubclassExtraOperandsDynamic() const;
 
 public:
   using Instruction::getContext;
 
   static bool classof(const Instruction *I) {
     return I->getOpcode() == Instruction::Call ||
-           I->getOpcode() == Instruction::Invoke;
+           I->getOpcode() == Instruction::Invoke ||
+           I->getOpcode() == Instruction::CallBr;
   }
   static bool classof(const Value *V) {
     return isa<Instruction>(V) && classof(cast<Instruction>(V));
@@ -1226,10 +1234,8 @@ public:
   void setCalledOperand(Value *V) { Op<CalledOperandOpEndIdx>() = V; }
 
   /// Sets the function called, including updating the function type.
-  void setCalledFunction(Value *Fn) {
-    setCalledFunction(
-        cast<FunctionType>(cast<PointerType>(Fn->getType())->getElementType()),
-        Fn);
+  void setCalledFunction(Function *Fn) {
+    setCalledFunction(Fn->getFunctionType(), Fn);
   }
 
   /// Sets the function called, including updating the function type.
@@ -1243,6 +1249,9 @@ public:
     this->FTy = FTy;
     assert(FTy == cast<FunctionType>(
                       cast<PointerType>(Fn->getType())->getElementType()));
+    // This function doesn't mutate the return type, only the function
+    // type. Seems broken, but I'm just gonna stick an assert in for now.
+    assert(getType() == FTy->getReturnType());
     setCalledOperand(Fn);
   }
 
