@@ -60,9 +60,6 @@ HANDLE_DI_FLAG((1 << 26), Trivial)
 HANDLE_DI_FLAG((1 << 27), BigEndian)
 HANDLE_DI_FLAG((1 << 28), LittleEndian)
 HANDLE_DI_FLAG((1 << 29), AllCallsDescribed)
-//HANDLE_DI_FLAG((1 << 27), Pure)
-//HANDLE_DI_FLAG((1 << 28), Elemental)
-//HANDLE_DI_FLAG((1 << 29), Recursive)
 
 // To avoid needing a dedicated value for IndirectVirtualBase, we use
 // the bitwise or of Virtual and FwdDecl, which does not otherwise
@@ -83,16 +80,19 @@ HANDLE_DI_FLAG((1 << 29), Largest)
 HANDLE_DISP_FLAG(0, Zero)
 // Virtuality is a two-bit enum field in the LSB of the word.
 // Values should match DW_VIRTUALITY_*.
-HANDLE_DISP_FLAG(1u, Virtual)
-HANDLE_DISP_FLAG(2u, PureVirtual)
+HANDLE_DISP_FLAG((1u << 0), Virtual)
+HANDLE_DISP_FLAG((1u << 1), PureVirtual)
 HANDLE_DISP_FLAG((1u << 2), LocalToUnit)
 HANDLE_DISP_FLAG((1u << 3), Definition)
 HANDLE_DISP_FLAG((1u << 4), Optimized)
+HANDLE_DISP_FLAG((1u << 5), Pure)
+HANDLE_DISP_FLAG((1u << 6), Elemental)
+HANDLE_DISP_FLAG((1u << 7), Recursive)
 
 #ifdef DISP_FLAG_LARGEST_NEEDED
 // Intended to be used with ADT/BitmaskEnum.h.
 // NOTE: Always must be equal to largest flag, check this when adding new flags.
-HANDLE_DISP_FLAG((1 << 4), Largest)
+HANDLE_DISP_FLAG((1 << 7), Largest)
 #undef DISP_FLAG_LARGEST_NEEDED
 #endif
 
