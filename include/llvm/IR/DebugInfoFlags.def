@@ -80,8 +80,8 @@ HANDLE_DI_FLAG((1 << 29), Largest)
 HANDLE_DISP_FLAG(0, Zero)
 // Virtuality is a two-bit enum field in the LSB of the word.
 // Values should match DW_VIRTUALITY_*.
-HANDLE_DISP_FLAG((1u << 0), Virtual)
-HANDLE_DISP_FLAG((1u << 1), PureVirtual)
+HANDLE_DISP_FLAG(1u, Virtual)
+HANDLE_DISP_FLAG(2u, PureVirtual)
 HANDLE_DISP_FLAG((1u << 2), LocalToUnit)
 HANDLE_DISP_FLAG((1u << 3), Definition)
 HANDLE_DISP_FLAG((1u << 4), Optimized)
