@@ -110,8 +110,68 @@ unsigned DwarfCompileUnit::getOrCreateSourceID(const DIFile *File) {
       File->getSource(), CUID);
 }
 
+DIE *DwarfCompileUnit::getOrCreateGlobalVariableDIE(
+    const DIGlobalVariable *GV, ArrayRef<GlobalExpr> GlobalExprs) {
+  // Check for pre-existence.
+  if (DIE *Die = getDIE(GV))
+    return Die;
+
+  assert(GV);
+
+  auto *GVContext = GV->getScope();
+  auto *GTy = DD->resolve(GV->getType());
+
+  // Construct the context before querying for the existence of the DIE in
+  // case such construction creates the DIE.
+  auto *CB = GVContext ? dyn_cast<DICommonBlock>(GVContext) : nullptr;
+  DIE *ContextDIE = CB ? getOrCreateCommonBlock(CB, GlobalExprs)
+    : getOrCreateContextDIE(GVContext);
+
+  // Add to map.
+  DIE *VariableDIE = &createAndAddDIE(GV->getTag(), *ContextDIE, GV);
+  DIScope *DeclContext;
+  if (auto *SDMDecl = GV->getStaticDataMemberDeclaration()) {
+    DeclContext = resolve(SDMDecl->getScope());
+    assert(SDMDecl->isStaticMember() && "Expected static member decl");
+    assert(GV->isDefinition());
+    // We need the declaration DIE that is in the static member's class.
+    DIE *VariableSpecDIE = getOrCreateStaticMemberDIE(SDMDecl);
+    addDIEEntry(*VariableDIE, dwarf::DW_AT_specification, *VariableSpecDIE);
+    // If the global variable's type is different from the one in the class
+    // member type, assume that it's more specific and also emit it.
+    if (GTy != DD->resolve(SDMDecl->getBaseType()))
+      addType(*VariableDIE, GTy);
+  } else {
+    DeclContext = GV->getScope();
+    // Add name and type.
+    addString(*VariableDIE, dwarf::DW_AT_name, GV->getDisplayName());
+    addType(*VariableDIE, GTy);
+
+    // Add scoping info.
+    if (!GV->isLocalToUnit())
+      addFlag(*VariableDIE, dwarf::DW_AT_external);
+
+    // Add line number info.
+    addSourceLine(*VariableDIE, GV);
+  }
+
+  if (!GV->isDefinition())
+    addFlag(*VariableDIE, dwarf::DW_AT_declaration);
+  else
+    addGlobalName(GV->getName(), *VariableDIE, DeclContext);
+
+  if (uint32_t AlignInBytes = GV->getAlignInBytes())
+    addUInt(*VariableDIE, dwarf::DW_AT_alignment, dwarf::DW_FORM_udata,
+            AlignInBytes);
+
+  // Add location.
+  addLocationAttribute(VariableDIE, GV, GlobalExprs);
+
+  return VariableDIE;
+}
+
 void DwarfCompileUnit::addLocationAttribute(
-    DIE *ToDIE, const DIGlobalVariable *GV, ArrayRef<GlobalExpr> GlobalExprs) {
+    DIE *VariableDIE, const DIGlobalVariable *GV, ArrayRef<GlobalExpr> GlobalExprs) {
   bool addToAccelTable = false;
   DIELoc *Loc = nullptr;
   std::unique_ptr<DIEDwarfExpression> DwarfExpr;
@@ -124,7 +184,7 @@ void DwarfCompileUnit::addLocationAttribute(
     // DW_AT_const_value(X).
     if (GlobalExprs.size() == 1 && Expr && Expr->isConstant()) {
       addToAccelTable = true;
-      addConstantValue(*ToDIE, /*Unsigned=*/true, Expr->getElement(1));
+      addConstantValue(*VariableDIE, /*Unsigned=*/true, Expr->getElement(1));
       break;
     }
 
@@ -194,19 +254,19 @@ void DwarfCompileUnit::addLocationAttribute(
     DwarfExpr->addExpression(Expr);
   }
   if (Loc)
-    addBlock(*ToDIE, dwarf::DW_AT_location, DwarfExpr->finalize());
+    addBlock(*VariableDIE, dwarf::DW_AT_location, DwarfExpr->finalize());
 
   if (DD->useAllLinkageNames())
-    addLinkageName(*ToDIE, GV->getLinkageName());
+    addLinkageName(*VariableDIE, GV->getLinkageName());
 
   if (addToAccelTable) {
-    DD->addAccelName(*CUNode, GV->getName(), *ToDIE);
+    DD->addAccelName(*CUNode, GV->getName(), *VariableDIE);
 
     // If the linkage name is different than the name, go ahead and output
     // that as well into the name table.
     if (GV->getLinkageName() != "" && GV->getName() != GV->getLinkageName() &&
         DD->useAllLinkageNames())
-      DD->addAccelName(*CUNode, GV->getLinkageName(), *ToDIE);
+      DD->addAccelName(*CUNode, GV->getLinkageName(), *VariableDIE);
   }
 }
 
@@ -231,66 +291,6 @@ DIE *DwarfCompileUnit::getOrCreateCommonBlock(
     addUInt(NDie, dwarf::DW_AT_alignment, dwarf::DW_FORM_udata, AlignInBytes);
   }
   return &NDie;
-}
-
-DIE *DwarfCompileUnit::getOrCreateGlobalVariableDIE(
-    const DIGlobalVariable *GV, ArrayRef<GlobalExpr> GlobalExprs) {
-  // Check for pre-existence.
-  if (DIE *Die = getDIE(GV))
-    return Die;
-
-  assert(GV);
-
-  auto *GVContext = GV->getScope();
-  auto *GTy = DD->resolve(GV->getType());
-
-  // Construct the context before querying for the existence of the DIE in
-  // case such construction creates the DIE.
-  auto *CB = GVContext ? dyn_cast<DICommonBlock>(GVContext) : nullptr;
-  DIE *ContextDIE = CB ? getOrCreateCommonBlock(CB, GlobalExprs)
-    : getOrCreateContextDIE(GVContext);
-
-  // Add to map.
-  DIE *VariableDIE = &createAndAddDIE(GV->getTag(), *ContextDIE, GV);
-  DIScope *DeclContext;
-  if (auto *SDMDecl = GV->getStaticDataMemberDeclaration()) {
-    DeclContext = resolve(SDMDecl->getScope());
-    assert(SDMDecl->isStaticMember() && "Expected static member decl");
-    assert(GV->isDefinition());
-    // We need the declaration DIE that is in the static member's class.
-    DIE *VariableSpecDIE = getOrCreateStaticMemberDIE(SDMDecl);
-    addDIEEntry(*VariableDIE, dwarf::DW_AT_specification, *VariableSpecDIE);
-    // If the global variable's type is different from the one in the class
-    // member type, assume that it's more specific and also emit it.
-    if (GTy != DD->resolve(SDMDecl->getBaseType()))
-      addType(*VariableDIE, GTy);
-  } else {
-    DeclContext = GV->getScope();
-    // Add name and type.
-    addString(*VariableDIE, dwarf::DW_AT_name, GV->getDisplayName());
-    addType(*VariableDIE, GTy);
-
-    // Add scoping info.
-    if (!GV->isLocalToUnit())
-      addFlag(*VariableDIE, dwarf::DW_AT_external);
-
-    // Add line number info.
-    addSourceLine(*VariableDIE, GV);
-  }
-
-  if (!GV->isDefinition())
-    addFlag(*VariableDIE, dwarf::DW_AT_declaration);
-  else
-    addGlobalName(GV->getName(), *VariableDIE, DeclContext);
-
-  if (uint32_t AlignInBytes = GV->getAlignInBytes())
-    addUInt(*VariableDIE, dwarf::DW_AT_alignment, dwarf::DW_FORM_udata,
-            AlignInBytes);
-
-  // Add location.
-  addLocationAttribute(VariableDIE, GV, GlobalExprs);
-
-  return VariableDIE;
 }
 
 void DwarfCompileUnit::addRange(RangeSpan Range) {
