@@ -62,6 +62,11 @@ const RegisterBank &MipsRegisterBankInfo::getRegBankFromRegClass(
   case Mips::GPRMM16MovePPairFirst_and_GPRMM16MovePPairSecondRegClassID:
   case Mips::SP32RegClassID:
     return getRegBank(Mips::GPRBRegBankID);
+  case Mips::FGRCCRegClassID:
+  case Mips::FGR64RegClassID:
+  case Mips::AFGR64RegClassID:
+  case Mips::AFGR64_and_OddSPRegClassID:
+    return getRegBank(Mips::FPRBRegBankID);
   default:
     llvm_unreachable("Register class not supported");
   }
@@ -86,6 +91,7 @@ MipsRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   case G_ADD:
   case G_SUB:
   case G_MUL:
+  case G_UMULH:
   case G_LOAD:
   case G_STORE:
   case G_ZEXTLOAD:

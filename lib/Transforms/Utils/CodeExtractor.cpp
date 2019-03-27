@@ -798,6 +798,7 @@ Function *CodeExtractor::constructFunction(const ValueSet &inputs,
       case Attribute::SwiftSelf:
       case Attribute::WriteOnly:
       case Attribute::ZExt:
+      case Attribute::ImmArg:
       case Attribute::EndAttrKinds:
         continue;
       // Those attributes should be safe to propagate to the extracted function.
@@ -886,16 +887,14 @@ Function *CodeExtractor::constructFunction(const ValueSet &inputs,
 }
 
 /// Erase lifetime.start markers which reference inputs to the extraction
-/// region, and insert the referenced memory into \p LifetimesStart. Do the same
-/// with lifetime.end markers (but insert them into \p LifetimesEnd).
+/// region, and insert the referenced memory into \p LifetimesStart.
 ///
 /// The extraction region is defined by a set of blocks (\p Blocks), and a set
 /// of allocas which will be moved from the caller function into the extracted
 /// function (\p SunkAllocas).
 static void eraseLifetimeMarkersOnInputs(const SetVector<BasicBlock *> &Blocks,
                                          const SetVector<Value *> &SunkAllocas,
-                                         SetVector<Value *> &LifetimesStart,
-                                         SetVector<Value *> &LifetimesEnd) {
+                                         SetVector<Value *> &LifetimesStart) {
   for (BasicBlock *BB : Blocks) {
     for (auto It = BB->begin(), End = BB->end(); It != End;) {
       auto *II = dyn_cast<IntrinsicInst>(&*It);
@@ -912,8 +911,6 @@ static void eraseLifetimeMarkersOnInputs(const SetVector<BasicBlock *> &Blocks,
 
       if (II->getIntrinsicID() == Intrinsic::lifetime_start)
         LifetimesStart.insert(Mem);
-      else
-        LifetimesEnd.insert(Mem);
       II->eraseFromParent();
     }
   }
@@ -1421,12 +1418,11 @@ Function *CodeExtractor::extractCodeRegion() {
   }
 
   // Collect objects which are inputs to the extraction region and also
-  // referenced by lifetime start/end markers within it. The effects of these
+  // referenced by lifetime start markers within it. The effects of these
   // markers must be replicated in the calling function to prevent the stack
   // coloring pass from merging slots which store input objects.
-  ValueSet LifetimesStart, LifetimesEnd;
-  eraseLifetimeMarkersOnInputs(Blocks, SinkingCands, LifetimesStart,
-                               LifetimesEnd);
+  ValueSet LifetimesStart;
+  eraseLifetimeMarkersOnInputs(Blocks, SinkingCands, LifetimesStart);
 
   // Construct new function based on inputs/outputs & add allocas for all defs.
   Function *newFunction =
@@ -1449,9 +1445,8 @@ Function *CodeExtractor::extractCodeRegion() {
 
   // Replicate the effects of any lifetime start/end markers which referenced
   // input objects in the extraction region by placing markers around the call.
-  insertLifetimeMarkersSurroundingCall(oldFunction->getParent(),
-                                       LifetimesStart.getArrayRef(),
-                                       LifetimesEnd.getArrayRef(), TheCall);
+  insertLifetimeMarkersSurroundingCall(
+      oldFunction->getParent(), LifetimesStart.getArrayRef(), {}, TheCall);
 
   // Propagate personality info to the new function if there is one.
   if (oldFunction->hasPersonalityFn())
