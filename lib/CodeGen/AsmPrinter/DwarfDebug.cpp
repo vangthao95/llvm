@@ -1475,7 +1475,7 @@ void DwarfDebug::collectEntityInfo(DwarfCompileUnit &TheCU,
             DbgVariable TVar = {LV, IV.second};
             DebugLocStream::ListBuilder LB(DebugLocs, TheCU, *Asm, TVar, *MInsn);
             for (auto &Entry : Entries)
-              Entry.finalize(*Asm, LB, ST);
+              Entry.finalize(*Asm, LB, ST, TheCU);
             LB.finalize();
             Offset = TVar.getDebugLocListIndex();
             if (Offset != ~0u)
@@ -2133,10 +2133,11 @@ void DebugLocEntry::finalize(const AsmPrinter &AP,
 
 void DebugLocEntry::finalize(const AsmPrinter &AP,
                              DebugLocStream::ListBuilder &List,
-                             const DIStringType *ST) {
+                             const DIStringType *ST,
+                             DwarfCompileUnit &TheCU) {
   DebugLocStream::EntryBuilder Entry(List, Begin, End);
   BufferByteStreamer Streamer = Entry.getStreamer();
-  DebugLocDwarfExpression DwarfExpr(AP.getDwarfVersion(), Streamer);
+  DebugLocDwarfExpression DwarfExpr(AP.getDwarfVersion(), Streamer, TheCU);
   DebugLocEntry::Value Value = Values[0];
   assert(!Value.isFragment());
   assert(Values.size() == 1 && "only fragments may have >1 value");

@@ -60,14 +60,6 @@ HANDLE_DI_FLAG((1 << 28), LittleEndian)
 HANDLE_DI_FLAG((1 << 29), AllCallsDescribed)
 HANDLE_DI_FLAG((1 << 30), NonTrivial)
 
-// Fortran flags: use bit 30 to indicate it's Fortran and then overload some
-// flags that otherwise have no semantics with respect to Fortran and are not
-// used in DISubprogram's member functions
-HANDLE_DI_FLAG((1 << 30), Fortran)
-HANDLE_DI_FLAG((1 << 30)|(1 << 9), Pure)
-HANDLE_DI_FLAG((1 << 30)|(1 << 15), Elemental)
-HANDLE_DI_FLAG((1 << 30)|(1 << 19), Recursive)
-
 // To avoid needing a dedicated value for IndirectVirtualBase, we use
 // the bitwise or of Virtual and FwdDecl, which does not otherwise
 // make sense for inheritance.

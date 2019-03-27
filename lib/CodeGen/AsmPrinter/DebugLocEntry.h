@@ -149,7 +149,7 @@ public:
 
   /// Lower this entry into a DWARF expression.
   void finalize(const AsmPrinter &AP, DebugLocStream::ListBuilder &List,
-                const DIStringType *ST);
+                const DIStringType *ST, DwarfCompileUnit &TheCU);
 
   void finalize(const AsmPrinter &AP,
                 DebugLocStream::ListBuilder &List,
