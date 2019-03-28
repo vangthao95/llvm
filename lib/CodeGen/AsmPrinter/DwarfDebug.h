@@ -743,7 +743,8 @@ public:
 
   DIE *getSubrangeDie(const DIFortranSubrange *SR) const;
   void constructSubrangeDie(const DIFortranArrayType *AT,
-                            DbgVariable &DV, DwarfCompileUnit &TheCU);
+                            SmallDenseMap<const DIVariable *, DbgVariable> &DV,
+                            DwarfCompileUnit &TheCU);
 
   /// \defgroup DebuggerTuning Predicates to tune DWARF for a given debugger.
   ///
