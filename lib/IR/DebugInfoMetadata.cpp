@@ -195,15 +195,6 @@ DINode::DIFlags DINode::splitFlags(DIFlags Flags,
       SplitFlags.push_back(FlagVirtualInheritance);
     Flags &= ~R;
   }
-  if (Flags & FlagFortran) {
-    if ((Flags & FlagPure) == FlagPure)
-      SplitFlags.push_back(FlagPure);
-    if ((Flags & FlagElemental) == FlagElemental)
-      SplitFlags.push_back(FlagElemental);
-    if ((Flags & FlagRecursive) == FlagRecursive)
-      SplitFlags.push_back(FlagRecursive);
-    Flags &= ~(FlagPure|FlagElemental|FlagRecursive);
-  }
   if ((Flags & FlagIndirectVirtualBase) == FlagIndirectVirtualBase) {
     Flags &= ~FlagIndirectVirtualBase;
     SplitFlags.push_back(FlagIndirectVirtualBase);
@@ -862,6 +853,7 @@ DIExpression *DIExpression::getImpl(LLVMContext &Context,
 
 unsigned DIExpression::ExprOperand::getSize() const {
   switch (getOp()) {
+  case dwarf::DW_OP_LLVM_convert:
   case dwarf::DW_OP_LLVM_fragment:
     return 3;
   case dwarf::DW_OP_constu:
@@ -907,6 +899,7 @@ bool DIExpression::isValid() const {
         return false;
       break;
     }
+    case dwarf::DW_OP_LLVM_convert:
     case dwarf::DW_OP_constu:
     case dwarf::DW_OP_plus_uconst:
     case dwarf::DW_OP_plus:
