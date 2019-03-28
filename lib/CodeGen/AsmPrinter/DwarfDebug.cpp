@@ -1036,50 +1036,38 @@ DIE *DwarfDebug::getSubrangeDie(const DIFortranSubrange *SR) const {
 void DwarfDebug::constructSubrangeDie(const DIFortranArrayType *AT,
                                       DbgVariable &DV,
                                       DwarfCompileUnit &TheCU) {
-  dwarf::Attribute Attribute;
-  const DIFortranSubrange *WFS = nullptr;
-  DIExpression *WEx = nullptr;
-  const DIVariable *DI = DV.getVariable();
+  const dwarf::Attribute UpperAttr = dwarf::DW_AT_upper_bound;
+  const dwarf::Attribute LowerAttr = dwarf::DW_AT_lower_bound;
   DINodeArray Elements = AT->getElements();
 
   for (unsigned i = 0, N = Elements.size(); i < N; ++i) {
     DINode *Element = cast<DINode>(Elements[i]);
     if (const DIFortranSubrange *FS = dyn_cast<DIFortranSubrange>(Element)) {
-      if (DIVariable *UBV = FS->getUpperBound())
-        if (UBV == DI) {
-          Attribute = dwarf::DW_AT_upper_bound;
-          WFS = FS;
-          WEx = FS->getUpperBoundExp();
-          break;
+      DIExpression *UWEx = nullptr;
+      DIExpression *LWEx = nullptr;
+      if (FS->getLowerBound())
+        LWEx = FS->getLowerBoundExp();
+      if (FS->getUpperBound())
+        UWEx = FS->getUpperBoundExp();
+      if (LWEx || UWEx) {
+        auto I = SubrangeDieMap.find(FS);
+        if (I == SubrangeDieMap.end()) {
+          DIE *Die = DIE::get(DIEValueAllocator, dwarf::DW_TAG_subrange_type);
+          SubrangeDieMap[FS] = Die;
+          if (LWEx)
+            TheCU.constructDieLocationAddExpr(*Die, LowerAttr, DV, LWEx);
+          if (UWEx)
+            TheCU.constructDieLocationAddExpr(*Die, UpperAttr, DV, UWEx);
         }
-      if (DIVariable *LBV = FS->getLowerBound())
-        if (LBV == DI) {
-          Attribute = dwarf::DW_AT_lower_bound;
-          WFS = FS;
-          WEx = FS->getLowerBoundExp();
-          break;
-        }          
+      }
     }
   }
-
-  if (!WFS)
-    return;
-
-  DIE *Die;
-  auto I = SubrangeDieMap.find(WFS);
-  if (I == SubrangeDieMap.end()) {
-    Die = DIE::get(DIEValueAllocator, dwarf::DW_TAG_subrange_type);
-    SubrangeDieMap[WFS] = Die;
-  } else {
-    Die = I->second;
-  }
-
-  TheCU.constructDieLocationAddExpr(*Die, Attribute, DV, WEx);
 }
 
 // Collect variable information from side table maintained by MF.
 void DwarfDebug::collectVariableInfoFromMFTable(
     DwarfCompileUnit &TheCU, DenseSet<InlinedEntity> &Processed) {
+  clearDependentTracking();
   SmallDenseMap<InlinedEntity, DbgVariable *> MFVars;
   for (const auto &VI : Asm->MF->getVariableDbgInfo()) {
     if (!VI.Var)
@@ -1099,11 +1087,29 @@ void DwarfDebug::collectVariableInfoFromMFTable(
     auto RegVar = llvm::make_unique<DbgVariable>(
                     cast<DILocalVariable>(Var.first), Var.second);
     RegVar->initializeMMI(VI.Expr, VI.Slot);
-    if (VariableInDependentType.count(VI.Var)) {
-      const DIType *DT = VariableInDependentType[VI.Var];
-      if (const DIFortranArrayType *AT = dyn_cast<DIFortranArrayType>(DT))
+    Metadata *TypeMD = VI.Var->getType();
+    if (const DIStringType *ST = dyn_cast<DIStringType>(TypeMD)) {
+      if (const DIVariable *LV = ST->getStringLength())
+        VariableInDependentType[LV] = ST;
+    }
+    if (const DIFortranArrayType *AT = dyn_cast<DIFortranArrayType>(TypeMD)) {
+      bool doConstructDIE = false;
+      for (const DINode *S : AT->getElements()) {
+        if (const DIFortranSubrange *FS = dyn_cast<DIFortranSubrange>(S)) {
+          if (const DIVariable *LBV = FS->getLowerBound()) {
+            doConstructDIE = true;
+            VariableInDependentType[LBV] = AT;
+          }
+          if (const DIVariable *UBV = FS->getUpperBound()) {
+            doConstructDIE = true;
+            VariableInDependentType[UBV] = AT;
+          }
+        }
+      }
+      if (doConstructDIE)
         constructSubrangeDie(AT, *RegVar.get(), TheCU);
-    } 
+    }
+
     if (DbgVariable *DbgVar = MFVars.lookup(Var))
       DbgVar->addMMIEntry(*RegVar);
     else if (InfoHolder.addScopeVariable(Scope, RegVar.get())) {
@@ -1365,36 +1371,11 @@ static bool validThroughout(LexicalScopes &LScopes,
   return false;
 }
 
-void DwarfDebug::populateDependentTypeMap() {
-  for (const auto &I : DbgValues) {
-    InlinedEntity IV = I.first;
-    if (I.second.empty())
-      continue;
-    if (const DIVariable *DIV = dyn_cast<DIVariable>(IV.first)) {
-      if (const DIStringType *ST = dyn_cast<DIStringType>(
-              static_cast<const Metadata *>(DIV->getType())))
-        if (const DIVariable *LV = ST->getStringLength())
-          VariableInDependentType[LV] = ST;
-
-      if (const DIFortranArrayType *AT = dyn_cast<DIFortranArrayType>(
-              static_cast<const Metadata *>(DIV->getType())))
-        for (const DINode *S : AT->getElements())
-          if (const DIFortranSubrange *FS = dyn_cast<DIFortranSubrange>(S)) {
-            if (const DIVariable *LBV = FS->getLowerBound())
-              VariableInDependentType[LBV] = AT;
-            if (const DIVariable *UBV = FS->getUpperBound())
-              VariableInDependentType[UBV] = AT;
-        }
-    }
-  }
-}
-
 // Find variables for each lexical scope.
 void DwarfDebug::collectEntityInfo(DwarfCompileUnit &TheCU,
                                    const DISubprogram *SP,
                                    DenseSet<InlinedEntity> &Processed) {
   clearDependentTracking();
-  populateDependentTypeMap();
   // Grab the variable info that was squirreled away in the MMI side-table.
   collectVariableInfoFromMFTable(TheCU, Processed);
 

@@ -579,9 +579,6 @@ class DwarfDebug : public DebugHandlerBase {
   /// Emit the reference to the section.
   void emitSectionReference(const DwarfCompileUnit &CU);
 
-  /// Populate dependent type variable map
-  void populateDependentTypeMap();
-
   /// Clear dependent type tracking map
   void clearDependentTracking() { VariableInDependentType.clear(); }
 
