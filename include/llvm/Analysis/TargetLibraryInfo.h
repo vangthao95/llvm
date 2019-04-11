@@ -87,7 +87,8 @@ public:
   enum VectorLibrary {
     NoLibrary,  // Don't use any vector library.
     Accelerate, // Use Accelerate framework.
-    SVML        // Intel short vector math library.
+    SVML,       // Intel short vector math library.
+    PGMATH      // PGI math library.
   };
 
   TargetLibraryInfoImpl();
