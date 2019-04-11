@@ -196,6 +196,12 @@ namespace llvm {
                                  unsigned Encoding,
                                  DINode::DIFlags Flags = DINode::FlagZero);
 
+    /// Create debugging information entry for a string
+    /// type.
+    /// \param Name        Type name.
+    /// \param SizeInBits  Size of the type.
+    DIStringType *createStringType(StringRef Name, uint64_t SizeInBits);
+
     /// Create debugging information entry for a qualified
     /// type, e.g. 'const int'.
     /// \param Tag         Tag identifing type, e.g. dwarf::TAG_volatile_type
@@ -483,6 +489,14 @@ namespace llvm {
     DICompositeType *createArrayType(uint64_t Size, uint32_t AlignInBits,
                                      DIType *Ty, DINodeArray Subscripts);
 
+    /// Create debugging information entry for a Fortran array.
+    /// \param Size         Array size.
+    /// \param AlignInBits  Alignment.
+    /// \param Ty           Element type.
+    /// \param Subscripts   Subscripts.
+    DIFortranArrayType *createFortranArrayType(
+        uint64_t Size, uint32_t AlignInBits, DIType *Ty, DINodeArray Subs);
+
     /// Create debugging information entry for a vector type.
     /// \param Size         Array size.
     /// \param AlignInBits  Alignment.
@@ -565,6 +579,12 @@ namespace llvm {
     /// implicitly uniques the values returned.
     DISubrange *getOrCreateSubrange(int64_t Lo, int64_t Count);
     DISubrange *getOrCreateSubrange(int64_t Lo, Metadata *CountNode);
+
+    /// Create a descriptor for a value range.  This
+    /// implicitly uniques the values returned.
+    DIFortranSubrange *getOrCreateFortranSubrange(
+        int64_t CLBound, int64_t CUBound, bool NoUBound, Metadata *Lbound,
+        Metadata * Lbndexp, Metadata *Ubound, Metadata * Ubndexp);
 
     /// Create a new descriptor for the specified variable.
     /// \param Context     Variable scope.
@@ -706,6 +726,17 @@ namespace llvm {
                  DISubprogram::DISPFlags SPFlags = DISubprogram::SPFlagZero,
                  DITemplateParameterArray TParams = nullptr,
                  DITypeArray ThrownTypes = nullptr);
+
+    /// Create common block entry for a Fortran common block
+    /// \param Scope       Scope of this common block
+    /// \param Name        The name of this common block
+    /// \param File        The file this common block is defined
+    /// \param LineNo      Line number
+    /// \param VarList     List of variables that a located in common block
+    /// \param AlignInBits Common block alignment
+    DICommonBlock *createCommonBlock(DIScope *Scope, DIGlobalVariable *decl,
+                                     StringRef Name, DIFile *File,
+                                     unsigned LineNo, uint32_t AlignInBits = 0);
 
     /// This creates new descriptor for a namespace with the specified
     /// parent scope.
