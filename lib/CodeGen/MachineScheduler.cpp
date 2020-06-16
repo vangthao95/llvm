@@ -174,6 +174,20 @@ protected:
   ScheduleDAGInstrs *createMachineScheduler();
 };
 
+class OptSchedSequential : public MachineSchedulerBase {
+public:
+  OptSchedSequential();
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override;
+
+  bool runOnMachineFunction(MachineFunction &) override;
+
+  static char ID; // Class identification, replacement for typeinfo
+
+protected:
+  ScheduleDAGInstrs *createMachineScheduler();
+};
+
 /// PostMachineScheduler runs after shortly before code emission.
 class PostMachineScheduler : public MachineSchedulerBase {
 public:
@@ -195,6 +209,7 @@ char MachineScheduler::ID = 0;
 
 char &llvm::MachineSchedulerID = MachineScheduler::ID;
 
+
 INITIALIZE_PASS_BEGIN(MachineScheduler, DEBUG_TYPE,
                       "Machine Instruction Scheduler", false, false)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
@@ -208,7 +223,37 @@ MachineScheduler::MachineScheduler() : MachineSchedulerBase(ID) {
   initializeMachineSchedulerPass(*PassRegistry::getPassRegistry());
 }
 
+char OptSchedSequential::ID = 0;
+
+char &llvm::OptSchedSequentialID = OptSchedSequential::ID;
+
+INITIALIZE_PASS_BEGIN(OptSchedSequential, DEBUG_TYPE, "OptSched Pass", false,
+                      false)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
+INITIALIZE_PASS_DEPENDENCY(SlotIndexes)
+INITIALIZE_PASS_DEPENDENCY(LiveIntervals)
+INITIALIZE_PASS_END(OptSchedSequential, DEBUG_TYPE, "OptSched Pass", false,
+                    false)
+
+OptSchedSequential::OptSchedSequential() : MachineSchedulerBase(ID) {
+  initializeOptSchedSequentialPass(*PassRegistry::getPassRegistry());
+}
+
 void MachineScheduler::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.setPreservesCFG();
+  AU.addRequiredID(MachineDominatorsID);
+  AU.addRequired<MachineLoopInfo>();
+  AU.addRequired<AAResultsWrapperPass>();
+  AU.addRequired<TargetPassConfig>();
+  AU.addRequired<SlotIndexes>();
+  AU.addPreserved<SlotIndexes>();
+  AU.addRequired<LiveIntervals>();
+  AU.addPreserved<LiveIntervals>();
+  MachineFunctionPass::getAnalysisUsage(AU);
+}
+
+void OptSchedSequential::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesCFG();
   AU.addRequiredID(MachineDominatorsID);
   AU.addRequired<MachineLoopInfo>();
@@ -243,6 +288,9 @@ void PostMachineScheduler::getAnalysisUsage(AnalysisUsage &AU) const {
 MachinePassRegistry<MachineSchedRegistry::ScheduleDAGCtor>
     MachineSchedRegistry::Registry;
 
+MachinePassRegistry<OptSchedPassRegistry::ScheduleDAGCtor>
+    OptSchedPassRegistry::Registry;
+
 /// A dummy default scheduler factory indicates whether the scheduler
 /// is overridden on the command line.
 static ScheduleDAGInstrs *useDefaultMachineSched(MachineSchedContext *C) {
@@ -255,6 +303,12 @@ static cl::opt<MachineSchedRegistry::ScheduleDAGCtor, false,
 MachineSchedOpt("misched",
                 cl::init(&useDefaultMachineSched), cl::Hidden,
                 cl::desc("Machine instruction scheduler to use"));
+
+/// MachineSchedOpt allows command line selection of the scheduler.
+static cl::opt<OptSchedPassRegistry::ScheduleDAGCtor, false,
+               RegisterPassParser<OptSchedPassRegistry>>
+    OptSchedOpt("OptSchedPass", cl::init(&useDefaultMachineSched), cl::Hidden,
+                cl::desc("OptSched pass"));
 
 static MachineSchedRegistry
 DefaultSchedRegistry("default", "Use the target's default scheduler choice.",
@@ -326,6 +380,16 @@ ScheduleDAGInstrs *MachineScheduler::createMachineScheduler() {
   return createGenericSchedLive(this);
 }
 
+/// Instantiate a ScheduleDAGInstrs that will be owned by the caller.
+ScheduleDAGInstrs *OptSchedSequential::createMachineScheduler() {
+  // Select the scheduler, or set the default.
+  OptSchedPassRegistry::ScheduleDAGCtor Ctor = OptSchedOpt;
+  if (Ctor != nullptr)
+    return Ctor(this);
+
+  return nullptr;
+}
+
 /// Instantiate a ScheduleDAGInstrs for PostRA scheduling that will be owned by
 /// the caller. We don't have a command line option to override the postRA
 /// scheduler. The Target must configure it.
@@ -356,6 +420,44 @@ ScheduleDAGInstrs *PostMachineScheduler::createPostMachineScheduler() {
 /// design would be to split blocks at scheduling boundaries, but LLVM has a
 /// general bias against block splitting purely for implementation simplicity.
 bool MachineScheduler::runOnMachineFunction(MachineFunction &mf) {
+  if (skipFunction(mf.getFunction()))
+    return false;
+
+  if (EnableMachineSched.getNumOccurrences()) {
+    if (!EnableMachineSched)
+      return false;
+  } else if (!mf.getSubtarget().enableMachineScheduler())
+    return false;
+
+  LLVM_DEBUG(dbgs() << "Before MISched:\n"; mf.print(dbgs()));
+
+  // Initialize the context of the pass.
+  MF = &mf;
+  MLI = &getAnalysis<MachineLoopInfo>();
+  MDT = &getAnalysis<MachineDominatorTree>();
+  PassConfig = &getAnalysis<TargetPassConfig>();
+  AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
+
+  LIS = &getAnalysis<LiveIntervals>();
+
+  if (VerifyScheduling) {
+    LLVM_DEBUG(LIS->dump());
+    MF->verify(this, "Before machine scheduling.");
+  }
+  RegClassInfo->runOnMachineFunction(*MF);
+
+  // Instantiate the selected scheduler for this target, function, and
+  // optimization level.
+  std::unique_ptr<ScheduleDAGInstrs> Scheduler(createMachineScheduler());
+  scheduleRegions(*Scheduler, false);
+
+  LLVM_DEBUG(LIS->dump());
+  if (VerifyScheduling)
+    MF->verify(this, "After machine scheduling.");
+  return true;
+}
+
+bool OptSchedSequential::runOnMachineFunction(MachineFunction &mf) {
   if (skipFunction(mf.getFunction()))
     return false;
 

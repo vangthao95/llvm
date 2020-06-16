@@ -164,6 +164,39 @@ public:
   }
 };
 
+class OptSchedPassRegistry
+    : public MachinePassRegistryNode<
+          ScheduleDAGInstrs *(*)(MachineSchedContext *)> {
+public:
+  using ScheduleDAGCtor = ScheduleDAGInstrs *(*)(MachineSchedContext *);
+
+  // RegisterPassParser requires a (misnamed) FunctionPassCtor type.
+  using FunctionPassCtor = ScheduleDAGCtor;
+
+  static MachinePassRegistry<ScheduleDAGCtor> Registry;
+
+  OptSchedPassRegistry(const char *N, const char *D, ScheduleDAGCtor C)
+      : MachinePassRegistryNode(N, D, C) {
+    Registry.Add(this);
+  }
+
+  ~OptSchedPassRegistry() { Registry.Remove(this); }
+
+  // Accessors.
+  //
+  OptSchedPassRegistry *getNext() const {
+    return (OptSchedPassRegistry *)MachinePassRegistryNode::getNext();
+  }
+
+  static OptSchedPassRegistry *getList() {
+    return (OptSchedPassRegistry *)Registry.getList();
+  }
+
+  static void setListener(MachinePassRegistryListener<FunctionPassCtor> *L) {
+    Registry.setListener(L);
+  }
+};
+
 class ScheduleDAGMI;
 
 /// Define a generic scheduling policy for targets that don't provide their own

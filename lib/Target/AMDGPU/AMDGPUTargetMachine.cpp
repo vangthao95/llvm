@@ -895,6 +895,7 @@ void GCNPassConfig::addFastRegAlloc() {
 }
 
 void GCNPassConfig::addOptimizedRegAlloc() {
+  insertPass(&MachineSchedulerID, &OptSchedSequentialID);
   if (OptExecMaskPreRA) {
     insertPass(&MachineSchedulerID, &SIOptimizeExecMaskingPreRAID);
     insertPass(&SIOptimizeExecMaskingPreRAID, &SIFormMemoryClausesID);
